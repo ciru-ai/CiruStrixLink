@@ -1,0 +1,34 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - name: Build
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/stage
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+            -ldflags "-s -w -X main.version=${version}" \
+            -o dist/stage/ciru-strixlink ./cmd/ciru-strixlink
+          cp README.md LICENSE dist/stage/
+          tar -C dist/stage -czf "dist/ciru-strixlink-${version}-linux-amd64.tar.gz" .
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS
