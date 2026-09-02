@@ -146,7 +146,9 @@ func Build(o Options) (Plan, error) {
 	if o.Prefix == "" {
 		o.Prefix = "/usr/local"
 	}
-	if !filepath.IsAbs(o.Prefix) {
+	// The prefix is an absolute Linux path; check slash semantics so plan
+	// previews on non-Linux review machines behave identically.
+	if !strings.HasPrefix(o.Prefix, "/") {
 		return Plan{}, errors.New("--prefix must be absolute")
 	}
 	report := prereq.Check(o.ToolVersion)

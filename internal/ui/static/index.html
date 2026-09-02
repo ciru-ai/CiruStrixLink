@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CiruStrixLink — Operator Console</title>
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to main content</a>
+
+<header class="shell" id="shell">
+  <div class="shell-brand">
+    <img class="brand-logo" src="assets/logo.png" alt="CiruStrixLink">
+    <span class="brand-ver mono" id="brand-ver">v—</span>
+  </div>
+  <div class="shell-pair" id="shell-pair" role="status">
+    <span class="pair-state" id="pair-state">—</span>
+  </div>
+  <div class="shell-ops">
+    <div class="host-chips" id="host-chips"></div>
+    <button class="btn btn-primary" id="btn-refresh" data-act="refresh" title="Re-collect reports from both hosts">
+      <svg viewBox="0 0 16 16" class="ic"><path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Refresh both hosts
+    </button>
+    <button class="btn btn-ghost btn-ic" id="btn-activity" data-act="activity" title="Activity log" aria-label="Activity log">
+      <svg viewBox="0 0 16 16" class="ic"><path d="M2 3.5h12M2 8h12M2 12.5h7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span class="act-dot" id="act-dot" hidden></span>
+    </button>
+    <button class="btn btn-ghost btn-ic" data-act="download" title="Download raw JSON reports" aria-label="Download raw JSON reports">
+      <svg viewBox="0 0 16 16" class="ic"><path d="M8 2v8.5M4.75 7.5 8 10.75 11.25 7.5M2.5 13.5h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <a class="btn btn-ghost btn-ic" href="https://github.com/ciru-ai/CiruStrixLink" target="_blank" rel="noreferrer" title="Documentation" aria-label="Documentation">
+      <svg viewBox="0 0 16 16" class="ic"><path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12Z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M6.2 6.1c.2-1 1-1.6 1.9-1.6 1 0 1.8.7 1.8 1.6 0 1.2-1 1.6-1.8 2.1-.3.2-.4.5-.4 1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="11.3" r=".9" fill="currentColor"/></svg>
+    </a>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs" role="tablist" aria-label="Console views">
+  <button class="tab" role="tab" data-view="pair" aria-selected="true">Pair</button>
+  <button class="tab" role="tab" data-view="setup" aria-selected="false">Setup</button>
+  <button class="tab" role="tab" data-view="test" aria-selected="false">Test</button>
+  <button class="tab" role="tab" data-view="runtime" aria-selected="false">Runtime</button>
+  <span class="tabs-ctx mono" id="tabs-ctx"></span>
+</nav>
+
+<div class="loadbar" id="loadbar" hidden><i></i></div>
+
+<main id="main" class="main" tabindex="-1">
+  <div class="boot">
+    <img src="assets/emblem.png" alt="" class="boot-mark">
+    <p>Collecting host reports…</p>
+  </div>
+</main>
+
+<aside class="drawer" id="drawer" aria-label="Activity log" hidden>
+  <div class="drawer-head">
+    <h2 class="micro">Activity log</h2>
+    <span class="micro dim">commands initiated by this console</span>
+    <button class="btn btn-ghost btn-ic" data-act="activity-close" aria-label="Close activity log">
+      <svg viewBox="0 0 16 16" class="ic"><path d="m3.5 3.5 9 9m0-9-9 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</aside>
+
+<div class="sr-only" role="status" aria-live="polite" id="live"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

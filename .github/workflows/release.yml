@@ -23,7 +23,7 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
             -ldflags "-s -w -X main.version=${version}" \
             -o dist/stage/ciru-strixlink ./cmd/ciru-strixlink
-          cp README.md LICENSE dist/stage/
+          cp README.md CHANGELOG.md LICENSE dist/stage/
           tar -C dist/stage -czf "dist/ciru-strixlink-${version}-linux-amd64.tar.gz" .
           cd dist
           sha256sum *.tar.gz > SHA256SUMS

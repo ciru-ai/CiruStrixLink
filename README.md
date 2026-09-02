@@ -86,6 +86,33 @@ NixOS. Those cases remain linked, distribution-specific instructions. The JSON
 plan exposes `can_apply` per action so a later UI can render an explicit Install
 button only where the same allowlist says it is safe.
 
+### Install a published Linux release
+
+Run this on both Strix Halo hosts. Set `VERSION` to the release you want to
+install:
+
+```bash
+VERSION=0.2.0
+curl -fL \
+  -o /tmp/ciru-strixlink.tar.gz \
+  "https://github.com/ciru-ai/CiruStrixLink/releases/download/v${VERSION}/ciru-strixlink-${VERSION}-linux-amd64.tar.gz"
+mkdir -p /tmp/ciru-strixlink-release
+tar -xzf /tmp/ciru-strixlink.tar.gz -C /tmp/ciru-strixlink-release
+sudo install -m 0755 \
+  /tmp/ciru-strixlink-release/ciru-strixlink \
+  /usr/local/bin/ciru-strixlink
+ciru-strixlink version
+ciru-strixlink prerequisites
+```
+
+If `prerequisites` reports missing user-space packages, preview the allowlisted
+installation plan before applying it:
+
+```bash
+ciru-strixlink install --include-optional
+sudo ciru-strixlink install --include-optional --apply
+```
+
 ## Build
 
 ```bash
@@ -186,6 +213,32 @@ To authenticate the temporary test agent, put the same random value in a
 mode-0600 file on both peers and pass `--token-file`. The
 `CIRU_STRIXLINK_TOKEN` environment variable is also supported.
 
+## Browser console
+
+The same binary serves a browser console. On the peer, start the read-only
+agent (Linux only; it binds exclusively to that host's USB4 address):
+
+```bash
+ciru-strixlink agent --token-file TOKEN_FILE
+```
+
+Then start the console here:
+
+```bash
+ciru-strixlink ui --peer 10.77.77.2 --token-file TOKEN_FILE
+```
+
+`ui` prints every address it is reachable at — loopback, each LAN IPv4, and
+the USB4 link address when the portable link is configured. Open the printed
+LAN address in a browser. The console only collects and previews: setup,
+rollback, install, and endpoint plans are the same dry runs the CLI prints,
+and applying them still requires the reviewed `sudo ... --apply` command. To
+review reports a peer sent over, reconcile files instead of a live agent:
+
+```bash
+ciru-strixlink ui --report-a host-a.transport.json --report-b host-b.transport.json
+```
+
 ## Jumbo frames
 
 Only enable MTU 9000 after the 1500-byte setup passes on both ends:
@@ -283,6 +336,17 @@ The model transport should use:
 
 Mid-microbatch transparent replay is unsafe unless the model layer can also
 reconstruct both peers' cache and scheduler state.
+
+## GLM5.3 Flash CIRU STRIX UI4
+
+The public model recipe for **GLM5.3 Flash CIRU STRIX UI4** uses
+CiruStrixLink to qualify the two-host USB4 path, reconcile the portable and NHI
+states, and generate the launcher environment before starting the two TP ranks.
+Follow the [model integration guide](docs/models/GLM5.3-Flash-CIRU-STRIX-UI4.md).
+
+The public display name is `GLM5.3 Flash CIRU STRIX UI4`; scripts and API calls
+use the filesystem-safe ID `GLM5.3-Flash-CIRU-STRIX-UI4`. Internal `IU4`
+symbols are retained only where the compiled kernel ABI requires them.
 
 ## Quality gates
 

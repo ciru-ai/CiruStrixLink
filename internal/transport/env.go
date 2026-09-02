@@ -69,11 +69,17 @@ func GenerateEnvironment(local Report, pair *PairReport, mode, runtimeName strin
 			return Environment{}, errors.New("local NHI endpoint does not match the reconciled production profile")
 		}
 	}
+	// Prefer the address recorded in the (freshly inspected or reviewed) report;
+	// fall back to a live interface lookup for older callers.
+	localAddr := local.LocalAddress
+	if localAddr == "" {
+		localAddr = InterfaceIPv4(local.Interface)
+	}
 	vars := map[string]string{
 		"CIRU_STRIXLINK_SCHEMA":        fmt.Sprint(SchemaVersion),
 		"CIRU_STRIXLINK_MODE":          selected,
 		"CIRU_STRIXLINK_INTERFACE":     local.Interface,
-		"CIRU_STRIXLINK_LOCAL_ADDRESS": InterfaceIPv4(local.Interface),
+		"CIRU_STRIXLINK_LOCAL_ADDRESS": localAddr,
 		"CIRU_STRIXLINK_PEER":          local.Peer,
 		"CIRU_STRIXLINK_NETWORK_HOPID": fmt.Sprint(ExpectedNetHopID),
 		"NCCL_SOCKET_IFNAME":           "=" + local.Interface,

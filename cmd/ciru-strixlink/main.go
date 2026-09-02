@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -20,9 +21,10 @@ import (
 	"github.com/ciru-ai/CiruStrixLink/internal/link"
 	"github.com/ciru-ai/CiruStrixLink/internal/prereq"
 	transportstate "github.com/ciru-ai/CiruStrixLink/internal/transport"
+	"github.com/ciru-ai/CiruStrixLink/internal/ui"
 )
 
-var version = "0.1.0"
+var version = "0.2.0"
 
 type testReport struct {
 	Version       string       `json:"ciru_strixlink_version"`
@@ -53,10 +55,14 @@ Usage:
   ciru-strixlink doctor --peer ADDRESS
   ciru-strixlink serve [--interface thunderbolt0] [--port 55321]
   ciru-strixlink test --peer ADDRESS [--duration 5s] [--streams 4] [--json]
+  ciru-strixlink ui [--addr 0.0.0.0] [--port 7749] [--peer ADDRESS] [--agent-port 7748] [--token-file PATH] [--report-a A.json --report-b B.json]
+  ciru-strixlink agent [--interface auto] [--port 7748] [--token-file PATH]
   ciru-strixlink version
 
 Setup is a dry run unless --apply is provided. Run "serve" on one peer, then
 "test" from the other. Both bind to the dedicated USB4 address.
+Run "agent" on the peer (Linux only, bound to its USB4 address), then "ui"
+here and open one of the printed addresses in a browser.
 `, version)
 }
 
@@ -89,6 +95,10 @@ func main() {
 		runServe(os.Args[2:])
 	case "test":
 		runTest(os.Args[2:])
+	case "ui":
+		runUI(os.Args[2:])
+	case "agent":
+		runAgent(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -707,6 +717,93 @@ func runTest(args []string) {
 	}
 	if !result.Policy.Ready || !mtuOK {
 		os.Exit(2)
+	}
+}
+
+func runUI(args []string) {
+	fs := flag.NewFlagSet("ui", flag.ExitOnError)
+	addr := fs.String("addr", "0.0.0.0", "console bind address")
+	port := fs.Int("port", ui.DefaultConsolePort, "console HTTP port")
+	peer := fs.String("peer", "", "peer USB4 address; enables peer collection through its agent")
+	agentPort := fs.Int("agent-port", ui.DefaultAgentPort, "peer agent HTTP port")
+	tokenFile := fs.String("token-file", "", "optional shared token file (or CIRU_STRIXLINK_TOKEN)")
+	reportA := fs.String("report-a", "", "endpoint A transport report; requires --report-b")
+	reportB := fs.String("report-b", "", "endpoint B transport report; requires --report-a")
+	_ = fs.Parse(args)
+	if (*reportA == "") != (*reportB == "") {
+		fail(errors.New("--report-a and --report-b must be provided together"))
+	}
+	token, err := tokenFrom(*tokenFile)
+	if err != nil {
+		fail(err)
+	}
+	console, err := ui.NewConsole(ui.ConsoleConfig{Version: version, Addr: *addr, Port: *port, Peer: *peer, AgentPort: *agentPort, Token: token, ReportA: *reportA, ReportB: *reportB})
+	if err != nil {
+		fail(err)
+	}
+	l, err := net.Listen("tcp4", net.JoinHostPort(*addr, fmt.Sprint(*port)))
+	if err != nil {
+		fail(err)
+	}
+	fmt.Printf("CiruStrixLink %s console listening; open one of these addresses in a browser:\n", version)
+	for _, u := range console.URLs() {
+		fmt.Printf("  %-18s %s\n", u.Label, u.URL)
+	}
+	if *reportA != "" {
+		fmt.Printf("Pair source: report files %s + %s\n", *reportA, *reportB)
+	}
+	if *peer != "" {
+		fmt.Printf("Peer agent: http://%s:%d\n", *peer, *agentPort)
+	} else {
+		fmt.Println("Peer agent: not configured; start it on the peer with: ciru-strixlink agent")
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	srv := &http.Server{Handler: console, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fail(err)
+	}
+}
+
+func runAgent(args []string) {
+	fs := flag.NewFlagSet("agent", flag.ExitOnError)
+	ifaceName := fs.String("interface", "auto", "USB4NET interface or auto")
+	port := fs.Int("port", ui.DefaultAgentPort, "agent HTTP port")
+	tokenFile := fs.String("token-file", "", "optional shared token file (or CIRU_STRIXLINK_TOKEN)")
+	_ = fs.Parse(args)
+	if runtime.GOOS != "linux" {
+		fail(errors.New("agent is intended for Linux USB4NET peers"))
+	}
+	i, localIP, err := selectIP(*ifaceName)
+	if err != nil {
+		fail(err)
+	}
+	token, err := tokenFrom(*tokenFile)
+	if err != nil {
+		fail(err)
+	}
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "Warning: peer agent has no token; it remains bound only to the dedicated USB4 address")
+	}
+	agent := ui.NewAgent(ui.AgentConfig{Version: version, Interface: i.Name, LocalIP: localIP, Port: *port, Token: token})
+	l, err := net.Listen("tcp4", net.JoinHostPort(localIP, fmt.Sprint(*port)))
+	if err != nil {
+		fail(err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	fmt.Printf("CiruStrixLink peer agent listening on %s:%d via %s; press Ctrl-C to stop\n", localIP, *port, i.Name)
+	srv := &http.Server{Handler: agent, ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fail(err)
 	}
 }
 

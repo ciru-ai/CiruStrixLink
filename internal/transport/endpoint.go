@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -84,8 +85,10 @@ func endpointDefaults(o *EndpointOptions) error {
 	if !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(o.Name) {
 		return errors.New("endpoint name may contain only letters, digits, dot, underscore, and hyphen")
 	}
-	cleanState := filepath.Clean(o.StateDir)
-	if filepath.Dir(cleanState) != "/run" || filepath.Base(cleanState) == "." {
+	// The state directory is a Linux runtime path by design; validate it with
+	// slash semantics so dry-run previews behave identically on any host OS.
+	cleanState := path.Clean(o.StateDir)
+	if path.Dir(cleanState) != "/run" || path.Base(cleanState) == "." {
 		return errors.New("state directory must be one direct child of /run")
 	}
 	o.StateDir = cleanState

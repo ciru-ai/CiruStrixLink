@@ -1,0 +1,8 @@
+{
+  "name": "ciru-strixlink-console",
+  "private": true,
+  "description": "Dev preview shim for the CiruStrixLink embedded operator console",
+  "scripts": {
+    "dev": "node scripts/dev-preview.js"
+  }
+}
