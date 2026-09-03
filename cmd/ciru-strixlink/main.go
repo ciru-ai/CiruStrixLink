@@ -55,7 +55,7 @@ Usage:
   ciru-strixlink doctor --peer ADDRESS
   ciru-strixlink serve [--interface thunderbolt0] [--port 55321]
   ciru-strixlink test --peer ADDRESS [--duration 5s] [--streams 4] [--json]
-  ciru-strixlink ui [--addr 0.0.0.0] [--port 7749] [--peer ADDRESS] [--agent-port 7748] [--token-file PATH] [--report-a A.json --report-b B.json]
+  ciru-strixlink ui [--listen 127.0.0.1] [--port 7749] [--peer ADDRESS] [--agent-port 7748] [--token-file PATH] [--report-a A.json --report-b B.json]
   ciru-strixlink agent [--interface auto] [--port 7748] [--token-file PATH]
   ciru-strixlink version
 
@@ -722,13 +722,14 @@ func runTest(args []string) {
 
 func runUI(args []string) {
 	fs := flag.NewFlagSet("ui", flag.ExitOnError)
-	addr := fs.String("addr", "0.0.0.0", "console bind address")
+	listen := fs.String("listen", "127.0.0.1", "console listen address; use 0.0.0.0 only on a trusted LAN")
 	port := fs.Int("port", ui.DefaultConsolePort, "console HTTP port")
 	peer := fs.String("peer", "", "peer USB4 address; enables peer collection through its agent")
 	agentPort := fs.Int("agent-port", ui.DefaultAgentPort, "peer agent HTTP port")
 	tokenFile := fs.String("token-file", "", "optional shared token file (or CIRU_STRIXLINK_TOKEN)")
 	reportA := fs.String("report-a", "", "endpoint A transport report; requires --report-b")
 	reportB := fs.String("report-b", "", "endpoint B transport report; requires --report-a")
+	modelURL := fs.String("model-url", os.Getenv("CIRU_STRIXLINK_MODEL_URL"), "optional model frontend URL for read-only identity and performance monitoring")
 	_ = fs.Parse(args)
 	if (*reportA == "") != (*reportB == "") {
 		fail(errors.New("--report-a and --report-b must be provided together"))
@@ -737,11 +738,11 @@ func runUI(args []string) {
 	if err != nil {
 		fail(err)
 	}
-	console, err := ui.NewConsole(ui.ConsoleConfig{Version: version, Addr: *addr, Port: *port, Peer: *peer, AgentPort: *agentPort, Token: token, ReportA: *reportA, ReportB: *reportB})
+	console, err := ui.NewConsole(ui.ConsoleConfig{Version: version, Addr: *listen, Port: *port, Peer: *peer, AgentPort: *agentPort, Token: token, ReportA: *reportA, ReportB: *reportB, ModelURL: *modelURL})
 	if err != nil {
 		fail(err)
 	}
-	l, err := net.Listen("tcp4", net.JoinHostPort(*addr, fmt.Sprint(*port)))
+	l, err := net.Listen("tcp4", net.JoinHostPort(*listen, fmt.Sprint(*port)))
 	if err != nil {
 		fail(err)
 	}

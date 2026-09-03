@@ -66,6 +66,9 @@ const S = {
   local: null,          // console host composite
   peer: null,           // peer composite or {state, detail}
   pairEnv: null,        // {state, reason?, pair?, a?, b?, a_kind?, b_kind?}
+  model: null,
+  modelBusy: false,
+  historyMetric: "tg",
   activity: [],
   view: "pair",
   busy: false,
@@ -82,7 +85,7 @@ const S = {
 
 async function boot() {
   const hm = location.hash.match(/^#\/(\w+)(\?(.*))?$/);
-  if (hm && ["pair", "setup", "test", "runtime"].includes(hm[1])) S.view = hm[1];
+  if (hm && ["pair", "setup", "test", "runtime", "diagnostics"].includes(hm[1])) S.view = hm[1];
   const hparams = new URLSearchParams(hm && hm[3] ? hm[3] : "");
   try {
     S.health = await api("/api/health");
@@ -91,7 +94,7 @@ async function boot() {
     return;
   }
   renderShell();
-  await refreshAll(true);
+  await Promise.all([refreshAll(true), refreshModel()]);
   if (hparams.get("plan")) loadEndpointPlan(hparams.get("plan"));
   if (hparams.get("env")) {
     const [m, r] = hparams.get("env").split(":");
@@ -102,6 +105,7 @@ async function boot() {
     genEnv();
   }
   setInterval(tickAges, 5000);
+  setInterval(() => { if (!document.hidden) refreshModel(); }, 5000);
   setInterval(() => { if (!S.busy) refreshAll(true); }, 30000);
 }
 
@@ -128,6 +132,27 @@ async function refreshAll(quiet) {
 
 function tickAges() { renderShellAges(); }
 
+async function refreshModel() {
+  if (S.modelBusy) return;
+  S.modelBusy = true;
+  try {
+    S.model = await api("/api/model");
+  } catch {
+    S.model = { state: "unreachable", note: "Model monitoring is unavailable." };
+  } finally {
+    S.modelBusy = false;
+  }
+  renderModelPanel();
+}
+
+function renderModelPanel() {
+  const panel = $("#overview-model");
+  if (!panel) return;
+  const focused = document.activeElement && document.activeElement.dataset.historyMetric;
+  panel.innerHTML = modelOverviewHtml();
+  if (focused) panel.querySelector(`[data-history-metric="${focused}"]`)?.focus({ preventScroll: true });
+}
+
 /* ---------------- derived pair state ---------------- */
 
 function pairReport() { return S.pairEnv && S.pairEnv.state === "ok" ? S.pairEnv.pair : null; }
@@ -137,54 +162,60 @@ function reportB() { return S.pairEnv && S.pairEnv.b ? S.pairEnv.b : (S.peer && 
 function deriveState() {
   const env = S.pairEnv;
   if (!env || env.state !== "ok") {
-    return { key: "checking", tone: "off", title: "Checking both hosts",
-      sub: (env && env.reason) || "Collecting transport reports…",
-      primary: { label: "Refresh both hosts", act: "refresh", kind: "primary" } };
+    return { key: "checking", tone: env && env.reason ? "warn" : "off",
+      title: env && env.reason ? "Can't read both computers" : "Checking your connection…",
+      sub: env && env.reason ? "The dashboard couldn't get a fresh status from both computers. Check that both computers and their status collectors are reachable." : "Getting live connection status from both computers.",
+      primary: { label: "Check again", act: "refresh", kind: "primary" } };
   }
   const p = env.pair;
   if (!p.pair_identity_valid) {
-    return { key: "identity", tone: "bad", title: "Reports are not a reciprocal pair",
-      sub: "These two reports do not name each other as peers. Select the correct host pair or refresh the reports; no cleanup is suggested because the reports may be unrelated.",
-      primary: { label: "Refresh reports", act: "refresh", kind: "primary" } };
+    return { key: "identity", tone: "bad", title: "These computers don't match as a pair",
+      sub: "The two status reports describe different connections. Check which computer is selected on each end before changing any settings.",
+      primary: { label: "View diagnostics", act: "goto", view: "diagnostics", kind: "primary" } };
   }
   if (S.health && S.health.pair_source === "live") {
     const prA = S.local && S.local.prerequisites, prB = S.peer && S.peer.prerequisites;
     const bad = (pr) => pr && (pr.overall_status === "needs_action" || pr.overall_status === "unsupported");
     if (bad(prA) || bad(prB)) {
       const who = [bad(prA) ? (prA.system && prA.system.hostname) || "host A" : null, bad(prB) ? (prB.system && prB.system.hostname) || "host B" : null].filter(Boolean).join(" and ");
-      return { key: "prereq", tone: "warn", title: "One or both hosts need setup",
-        sub: `${who} ${bad(prA) && bad(prB) ? "have" : "has"} unmet requirements. The link cannot be qualified until they are resolved.`,
-        primary: { label: "Review requirements", act: "goto", view: "setup", kind: "primary" } };
+      return { key: "prereq", tone: "warn", title: "Connection setup needs attention",
+        sub: `${who} ${bad(prA) && bad(prB) ? "have" : "has"} a missing or unsupported requirement. Review setup to see what needs fixing.`,
+        primary: { label: "Review connection setup", act: "goto", view: "setup", kind: "primary" } };
     }
   }
   if (!p.portable_ready) {
-    return { key: "portable-down", tone: "warn", title: "USB4 control link is down",
-      sub: p.summary || "The portable USB4NET baseline is not ready. NHI and runtime export stay disabled until it is.",
-      primary: { label: "Open portable setup", act: "goto", view: "setup", kind: "primary" } };
+    return { key: "portable-down", tone: "warn", title: "The USB4 connection needs attention",
+      sub: "The computers cannot confirm a working connection over the cable. Check the cable and review the network setup.",
+      primary: { label: "Review connection setup", act: "goto", view: "setup", kind: "primary" } };
   }
-  if (p.cleanup_required || p.nhi_status === "partial") {
-    return { key: "partial", tone: "bad", title: "Accelerator endpoints do not match",
-      sub: (p.summary || "One-sided or mismatched NHI state.") + " Portable fallback stays available; runtime export is blocked until both endpoints are clean.",
-      primary: { label: "Review cleanup plan", act: "endpoint-plan", arg: "cleanup", kind: "danger" } };
+  if ([reportA(), reportB()].some((r) => r && r.nhi && r.nhi.status === "needs_privilege")) {
+    return { key: "privilege", tone: "warn", title: "Connected. Fast-mode status is unknown.",
+      sub: "The dashboard needs read-only administrator access to inspect fast USB4. This is a monitoring limitation, not a confirmed link failure.",
+      primary: { label: "View inspection details", act: "goto", view: "diagnostics", kind: "primary" } };
+  }
+  if (p.cleanup_required || (p.fallback && p.fallback.cleanup_required) || p.nhi_status === "partial") {
+    return { key: "partial", tone: "bad", title: "Fast USB4 needs attention",
+      sub: "The fast-link settings don't match across the two computers. Review the recovery steps before launching another workload; nothing will be changed automatically.",
+      primary: { label: "Review recovery steps", act: "endpoint-plan", arg: "cleanup", kind: "primary" } };
   }
   if (p.nhi_in_use) {
-    return { key: "in-use", tone: "warn", title: "Accelerator is held by a workload",
-      sub: p.summary || "Both endpoints are qualified, but a process holds the exclusive NHI lease. Stop that workload outside CiruStrixLink before a new launch.",
-      primary: { label: "View holders", act: "expand-endpoints", kind: "primary" } };
+    return { key: "in-use", tone: "live", title: "Fast USB4 is in use",
+      sub: "Both computers are connected, and a workload has the fast connection open. No connection changes are needed.",
+      primary: { label: "See what's using it", act: "expand-endpoints", kind: "primary" } };
   }
   if (p.nhi_status === "ready" && p.lease_available) {
-    return { key: "ready", tone: "ok", title: "Accelerator is ready for launch",
-      sub: p.summary || "Both endpoints are qualified at HopID 9/9 and the exclusive lease is available.",
-      primary: { label: "Generate runtime environment", act: "goto", view: "runtime", kind: "ok" } };
+    return { key: "ready", tone: "ok", title: "Fast USB4 is ready",
+      sub: "Both computers are connected. The fast connection is set up and available for your model to use.",
+      primary: { label: "View launch settings", act: "goto", view: "runtime", kind: "primary" } };
   }
   if (p.arm_allowed) {
-    return { key: "arm", tone: "live", title: "Accelerator can be prepared",
-      sub: p.summary || "Portable baseline is ready and both endpoints are unarmed. NHI prepare runs as one coordinated two-host transaction.",
-      primary: { label: "Prepare accelerator", act: "endpoint-plan", arg: "prepare", kind: "primary" } };
+    return { key: "arm", tone: "warn", title: "Connected. Fast USB4 needs setup.",
+      sub: "The cable connection works. Both computers support fast mode, but it hasn't been prepared yet.",
+      primary: { label: "Review fast-mode setup", act: "endpoint-plan", arg: "prepare", kind: "primary" } };
   }
-  return { key: "portable", tone: "ok", title: "Portable link is ready",
-    sub: p.summary || "NHI acceleration is unavailable on this pair; the portable USB4NET transport is the verified path.",
-    primary: { label: "Use portable mode", act: "goto", view: "runtime", kind: "ok" } };
+  return { key: "portable", tone: "ok", title: "Standard USB4 is ready",
+    sub: "The normal cable connection works. Fast mode is not confirmed available; your model can use the standard connection instead.",
+    primary: { label: "View launch settings", act: "goto", view: "runtime", kind: "primary" } };
 }
 
 /* ---------------- shell ---------------- */
@@ -221,18 +252,7 @@ function renderShell() {
 
   const ps = $("#pair-state");
   const p = pairReport();
-  if (!p) {
-    ps.innerHTML = `<span class="warn">pair state unavailable</span>`;
-  } else if (!p.pair_identity_valid) {
-    ps.innerHTML = `<b>${esc(p.host_a)}</b> ↔ <b>${esc(p.host_b)}</b> · <span class="bad">not a reciprocal pair</span>`;
-  } else {
-    const bits = [`<b>${esc(p.host_a)}</b> ↔ <b>${esc(p.host_b)}</b>`];
-    bits.push(p.portable_ready ? `<span class="ok">portable ready</span>` : `<span class="warn">portable down</span>`);
-    const nhi = { ready: '<span class="ok">NHI qualified</span>', in_use: '<span class="warn">NHI in use</span>', partial: '<span class="bad">NHI partial</span>', unavailable: '<span class="dim">NHI unavailable</span>' }[p.nhi_status] || `<span class="dim">NHI ${esc(p.nhi_status)}</span>`;
-    bits.push(nhi);
-    if (S.health && S.health.pair_source === "files") bits.push(`<span class="dim">from report files</span>`);
-    ps.innerHTML = bits.join(" · ");
-  }
+  ps.innerHTML = p ? `<b>${esc(p.host_a)}</b><span aria-hidden="true"> ↔ </span><b>${esc(p.host_b)}</b>` : "Your two-computer link";
 }
 
 function renderShellAges() {
@@ -373,11 +393,140 @@ function plate(side, rep, payload, kind) {
   </section>`;
 }
 
+function overviewComputer(side, connected) {
+  const rep = side === "a" ? reportA() : reportB();
+  const pay = payloadFor(side);
+  const name = (rep && rep.hostname) || (pay && pay.host && pay.host.hostname) || (side === "a" ? "This computer" : "Other computer");
+  return `<section class="overview-computer" aria-label="${esc(name)}">
+    <svg class="computer-icon" viewBox="0 0 72 64" fill="none" aria-hidden="true"><rect x="10" y="10" width="52" height="39" rx="7"/><path d="M18 55h36M24 18h24"/><circle cx="49" cy="38" r="2" class="computer-led ${connected ? "connected" : ""}"/></svg>
+    <h2>${esc(name)}</h2>
+    <p>${rep ? (pay && pay.host && pay.host.strix_halo_likely ? "Strix Halo computer" : "USB4 computer") : "Waiting for status"}</p>
+  </section>`;
+}
+
+function overviewAction(action) {
+  return `<button class="btn btn-${action.kind || "primary"}" data-act="${action.act}"${action.arg ? ` data-arg="${action.arg}"` : ""}${action.view ? ` data-view="${action.view}"` : ""}>${esc(action.label)}<span aria-hidden="true">→</span></button>`;
+}
+
+function modelSpeedHistoryHtml(m, monitored) {
+  const metric = S.historyMetric;
+  const isPP = metric === "pp";
+  const series = monitored ? (m.history || []) : [];
+  const points = series.filter((p) => Number.isFinite(p[metric]));
+  const current = monitored ? (isPP ? m.pp : m.live_tg) : null;
+  const value = current ? current.tokens_per_second.toLocaleString(undefined, { maximumFractionDigits: isPP ? 0 : 1 }) : "—";
+  const currentNote = current ? isPP ? current.basis : m.metrics?.running > 0 ? current.basis : "Idle · no output in this interval" : monitored ? "Collecting speed samples" : "Model metrics unavailable";
+  const end = series.length ? new Date(series[series.length - 1].at).getTime() : Date.now();
+  const start = series.length > 1 ? new Date(series[0].at).getTime() : end - 5000;
+  const span = Math.max(5000, end - start);
+  const max = Math.max(1, ...points.map((p) => p[metric]));
+  const step = 10 ** Math.floor(Math.log10(max));
+  const ceiling = Math.max(10, Math.ceil(max * 1.1 / step) * step);
+  const x = (p) => 4 + Math.max(0, Math.min(1, (new Date(p.at).getTime() - start) / span)) * 992;
+  const y = (p) => 8 + (1 - p[metric] / ceiling) * 128;
+  const segments = [];
+  let segment = [];
+  let lastAt = null;
+  for (const p of series) {
+    const at = new Date(p.at).getTime();
+    // Missing output samples are gaps, not zero speed or interpolated uptime.
+    // PP points are separate completed-request measurements.
+    if (!Number.isFinite(p[metric])) {
+      if (!isPP && segment.length) { segments.push(segment); segment = []; }
+      continue;
+    }
+    if (!isPP && lastAt !== null && at - lastAt > 30000 && segment.length) {
+      segments.push(segment); segment = [];
+    }
+    segment.push(p); lastAt = at;
+  }
+  if (segment.length) segments.push(segment);
+  const traces = segments.map((group) => {
+    const coords = group.map((p) => `${x(p).toFixed(2)},${y(p).toFixed(2)}`).join(" ");
+    const first = group[0], last = group[group.length - 1];
+    return `${!isPP && group.length > 1 ? `<polygon class="speed-history-area" points="${x(first)},136 ${coords} ${x(last)},136"/>` : ""}<polyline class="speed-history-line ${isPP ? "per-request" : ""}" points="${coords}" vector-effect="non-scaling-stroke"/>`;
+  }).join("");
+  const markers = isPP ? points : points.slice(-1);
+  const dots = markers.map((p) => `<circle class="speed-history-point" cx="${x(p)}" cy="${y(p)}" r="3" vector-effect="non-scaling-stroke"><title>${esc(fmtClock(p.at))} · ${p[metric].toFixed(1)} tok/s</title></circle>`).join("");
+  const duration = span < 60000 ? `${Math.round(span / 1000)}s` : `${Math.round(span / 60000)}m`;
+  const empty = !points.length ? `<div class="speed-history-empty">${monitored ? isPP ? "Prompt-fill history appears as requests finish." : "Waiting for the next speed sample." : "Connect the model to see live speed."}</div>` : "";
+  return `<section class="speed-history" aria-label="Token speed history">
+    <div class="speed-history-head"><div><h2>${isPP ? "Prompt-fill speed" : "Generation speed"}</h2><p class="speed-history-value">${value}<span>tok/s</span></p><p class="model-meta">${esc(currentNote)}</p></div>
+      <div class="speed-history-controls" role="group" aria-label="Speed chart metric">${[["tg", "Generation"], ["pp", "Prompt fill"]].map(([key, label]) => `<button type="button" data-act="history-metric" data-history-metric="${key}" aria-pressed="${metric === key}">${label}</button>`).join("")}</div>
+    </div>
+    <figure class="speed-history-figure"><div class="speed-history-scale" aria-hidden="true"><span>${ceiling.toLocaleString()}</span><span>${(ceiling / 2).toLocaleString()}</span><span>0</span></div>
+      <div class="speed-history-plot"><svg viewBox="0 0 1000 144" preserveAspectRatio="none" role="img" aria-label="${isPP ? "Prompt-fill measurements at request completion" : "Output tokens per second in polling intervals"}, ${points.length} measurements over ${duration}, scale 0 to ${ceiling} tokens per second">
+        <path class="speed-history-grid" d="M0 8H1000 M0 72H1000 M0 136H1000" vector-effect="non-scaling-stroke"/>${traces}${dots}
+      </svg>${empty}</div>
+      <figcaption><span>${series.length > 1 ? esc(fmtClock(series[0].at)) : "Collecting"}</span><span>${series.length > 1 ? `${duration} history · ` : ""}${isPP ? "per completed request" : "5s samples"}</span><span>Now</span></figcaption>
+    </figure>
+  </section>`;
+}
+
+function modelOverviewHtml() {
+  const m = S.model;
+  const p = pairReport();
+  const saved = S.health && S.health.pair_source === "files";
+  const monitored = !saved && m && m.state === "connected";
+  const active = monitored && m.metrics && m.metrics.running;
+  const waiting = monitored && m.metrics && m.metrics.waiting;
+  const hasActivity = monitored && m.metrics && m.metrics.running !== undefined;
+  const name = monitored ? m.name.replace(/-/g, " ") : !m ? "Checking model…" : m.state === "unconfigured" || saved ? "No model connected" : "Model API unreachable";
+  const apiHost = monitored ? `API on ${esc(m.api_host)}${m.context_window ? ` · ${Math.floor(m.context_window / 1024)}K context` : ""}` : esc(m && m.note || "Connect a model frontend with --model-url.");
+  const activity = hasActivity ? active > 0 ? `${active} running${waiting > 0 ? ` · ${waiting} queued` : ""}` : waiting > 0 ? `${waiting} queued` : "Idle" : monitored ? "API connected" : "";
+  const nhi = p && p.nhi_ready && p.pair_identity_valid;
+  const link = saved ? "Saved connection" : nhi ? "NHI · USB4STREAM" : p && p.portable_ready ? "Standard · USB4NET" : "Not confirmed";
+  const linkNote = saved ? "Not live" : nhi ? p.nhi_in_use ? "Open by a workload" : "Ready · not in use" : p && p.portable_ready ? "Available · fast mode not ready" : "Check connection status";
+  const acceptance = monitored ? m.acceptance : null;
+  const acceptanceTitle = m && m.speculation ? `${m.speculation} acceptance` : "Draft acceptance";
+  const acceptanceBasis = acceptance ? acceptance.basis === "Since engine start" ? acceptance.basis : `${timeAgo(acceptance.measured_at)} · latest drafts` : "Awaiting draft counters";
+  const acceptanceHelp = acceptance ? `${acceptance.accepted.toLocaleString()} accepted / ${acceptance.proposed.toLocaleString()} proposed draft tokens. Bonus target tokens are not counted. ${acceptance.basis}.` : "Acceptance is accepted draft tokens divided by proposed draft tokens; no reports does not mean zero acceptance.";
+  const pp = monitored ? m.pp : null;
+  const rate = (r, digits) => r ? `${r.tokens_per_second.toLocaleString(undefined, { maximumFractionDigits: digits })}<span>tok/s</span>` : `<span class="metric-unavailable">—</span>`;
+  const basis = (r) => r ? `${esc(r.basis)}${r.basis.startsWith("Last ") ? ` · ${timeAgo(r.measured_at)}` : ""}` : monitored ? "Awaiting measurement" : "Not available";
+  return `<div class="model-overview-grid">
+    <section class="model-identity"><h2>Serving model${activity ? `<span class="model-activity ${active > 0 ? "running" : ""}"><i aria-hidden="true"></i>${esc(activity)}</span>` : ""}</h2><p class="model-name" title="${esc(monitored ? m.name : name)}">${esc(name)}</p><p class="model-meta">${apiHost}</p></section>
+    <section class="model-link"><h2>Link type</h2><p class="model-link-name">${link}</p><p class="model-meta">${linkNote}</p></section>
+    <section class="model-speed" title="${esc(acceptanceHelp)}"><h2>${esc(acceptanceTitle)}</h2><p class="model-rate">${acceptance ? `${acceptance.percent.toFixed(1)}<span>%</span>` : '<span class="metric-unavailable">—</span>'}</p><p class="model-meta">${esc(acceptanceBasis)}</p></section>
+    <section class="model-speed"><h2>Prompt fill · PP</h2><p class="model-rate">${rate(pp, 0)}</p><p class="model-meta">${basis(pp)}</p></section>
+  </div>${modelSpeedHistoryHtml(m, monitored)}<p class="model-metrics-note">${monitored ? `Live speed uses elapsed wall time. PP excludes cached tokens.${m.tg ? ` Last completed decode: ${m.tg.tokens_per_second.toFixed(1)} tok/s (${esc(m.tg.basis.toLowerCase())}).` : ""} History retains up to 10 minutes while monitored.` : "Read-only model monitoring. Connection readiness is independent of model availability."}</p>`;
+}
+
 function vPair() {
+  const st = deriveState();
+  const p = pairReport();
+  const saved = S.health && S.health.pair_source === "files";
+  const connected = !!(p && p.pair_identity_valid && p.portable_ready);
+  const inUse = !!(connected && p.nhi_in_use);
+  const ready = st.key === "ready";
+  const nextTitle = inUse ? "No connection changes needed" : ready ? "Ready for your model" : "What to do next";
+  const nextNote = inUse ? "Keep this connection as it is. Open Diagnostics if you want to see which process is using it." : ready ? "Use fast USB4 (NHI) in your model launcher. StrixLink provides the settings; it does not start or stop the model." : st.sub;
+  return `<div class="overview">
+    <div class="overview-heading"><span class="overview-eyebrow">Your two-computer link</span><span class="overview-source">${saved ? "Saved report · not live" : "Live status · updates every 30 seconds"}</span></div>
+    <section class="overview-hero tone-${st.tone}" aria-labelledby="connection-title">
+      <div class="overview-title"><span class="overview-status-dot" aria-hidden="true"></span><h1 id="connection-title">${saved ? "Saved connection report" : esc(st.title)}</h1></div>
+      <p class="overview-description">${saved ? "Open Diagnostics to inspect the saved connection. Current readiness and usage are unknown." : esc(st.sub)}</p>
+      <div class="overview-pair">
+        ${overviewComputer("a", connected)}
+        <div class="overview-cable ${connected ? "connected" : ""}" role="img" aria-label="${connected ? "USB4 cable connection confirmed" : "USB4 connection not confirmed"}">
+          <span class="overview-cable-name">USB4 cable</span><div class="overview-cable-line"><i></i><i></i></div><strong>${connected ? (saved ? "Connected when saved" : "Connected") : "Not confirmed"}</strong>
+        </div>
+        ${overviewComputer("b", connected)}
+      </div>
+      <div id="overview-model" class="overview-model">${modelOverviewHtml()}</div>
+      <div class="overview-nextline">
+        <div><h2>${saved ? "Current status" : esc(nextTitle)}</h2><p>${saved ? "Connect the console to both computers to get live status." : esc(nextNote)}</p></div>${overviewAction(saved ? { label: "View saved diagnostics", act: "goto", view: "diagnostics" } : st.primary)}
+      </div>
+    </section>
+    <div class="overview-footer"><p>Read-only monitoring · model metrics refresh every 5 seconds</p><button class="btn btn-ghost" data-act="goto" data-view="diagnostics">Diagnostics <span aria-hidden="true">→</span></button></div>
+  </div>`;
+}
+
+function vDiagnostics() {
   const env = S.pairEnv;
   const st = deriveState();
   if (!env || env.state !== "ok") {
-    return `<div class="view-head"><h1>Pair</h1><span class="sub">two-host link state and the safe next action</span></div>
+    return `<div class="view-head"><h1>Diagnostics</h1><span class="sub">connection details for troubleshooting</span></div>
       ${env && env.reason ? `<div class="banner warn"><svg class="bic" viewBox="0 0 16 16"><path d="M8 2 1.8 13.5h12.4L8 2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.5v3.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.6" r=".8" fill="currentColor"/></svg><div><h3>Pair state unavailable</h3><p>${esc(env.reason)}</p></div></div>` : ""}
       ${peerHelp()}
       ${railHtml(null, null, null, st)}
@@ -391,7 +540,7 @@ function vPair() {
   if (S.health && S.health.pair_source === "files") {
     banners.push(`<div class="banner info"><svg class="bic" viewBox="0 0 16 16"><path d="M3 2.5h7l3 3V13.5H3V2.5Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M10 2.5v3h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg><div><h3>Reviewing report files</h3><p>The rail is rendered from two saved transport reports. Start the console with <span class="mono">--peer</span> and an agent on the other host for live state.</p></div></div>`);
   }
-  return `<div class="view-head"><h1>Pair</h1><span class="sub">two-host link state and the safe next action</span></div>
+  return `<div class="view-head"><h1>Diagnostics</h1><span class="sub">kernel, permissions, transport, and process details</span></div>
     ${banners.join("")}
     ${railHtml(a, b, p, st)}
     ${stateBarHtml(st)}
@@ -583,6 +732,7 @@ function hostName(side) {
 }
 
 async function loadEndpointPlan(action) {
+  S.view = "diagnostics";
   const peer = (reportA() && reportA().peer) || (S.local && S.local.transport && S.local.transport.peer) || "";
   S.ep = { action, res: null, error: null };
   renderView();
@@ -745,7 +895,7 @@ function rollbackHtml() {
 
 function vSetup() {
   const sup = S.local && S.local.host && S.local.host.supported === false;
-  return `<div class="view-head"><h1>Setup</h1><span class="sub">prerequisites, installation, and portable network configuration</span></div>
+  return `<div class="view-head"><h1>Connection setup</h1><span class="sub">requirements and network settings · changes are previewed, not applied</span></div>
     ${sup ? `<div class="banner warn"><svg class="bic" viewBox="0 0 16 16"><path d="M8 2 1.8 13.5h12.4L8 2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.5v3.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.6" r=".8" fill="currentColor"/></svg><div><h3>This console host is not a supported Strix Halo Linux system</h3><p>Prerequisite and plan previews still render. Apply the reviewed commands on the target hosts.</p></div></div>` : ""}
     <div class="sec"><div class="sec-h"><h2>Prerequisite inventory</h2></div>
       ${prereqCompareHtml()}
@@ -864,7 +1014,7 @@ function benchResultHtml(r) {
 }
 
 function vTest() {
-  return `<div class="view-head"><h1>Test</h1><span class="sub">diagnostics, qualification, and benchmark results</span></div>
+  return `<div class="view-head"><h1>Speed test</h1><span class="sub">tests use the cable and can affect a running model · run when idle</span></div>
     ${doctorHtml()}
     ${benchHtml()}`;
 }
@@ -876,7 +1026,7 @@ function vRuntime() {
   const blocked = p && (p.cleanup_required || p.nhi_status === "partial");
   const nhiOk = p && p.nhi_status === "ready" && p.lease_available && !p.cleanup_required;
   const e = S.rt.env;
-  return `<div class="view-head"><h1>Runtime</h1><span class="sub">transport selection and environment export</span></div>
+  return `<div class="view-head"><h1>Launch settings</h1><span class="sub">connection settings for your model launcher · this does not start a model</span></div>
     ${!p ? `<div class="banner warn"><div><h3>No reconciled pair</h3><p>Environment generation needs a fresh reconciled pair report.</p></div></div>` : ""}
     ${blocked ? `<div class="banner bad"><div><h3>Runtime export blocked</h3><p>Partial or mismatched NHI endpoints must be cleaned on both hosts before any environment — portable or NHI — is generated.</p></div></div>` : ""}
     <div class="sec"><div class="sec-h"><h2>Transport selection</h2></div>
@@ -889,8 +1039,8 @@ function vRuntime() {
         <div class="fld"><label>requested mode</label>
           <div class="seg" role="group" aria-label="Mode">
             <button data-set="rt.mode" data-val="auto" aria-pressed="${S.rt.mode === "auto"}">automatic</button>
-            <button data-set="rt.mode" data-val="portable" aria-pressed="${S.rt.mode === "portable"}">portable</button>
-            <button data-set="rt.mode" data-val="nhi" aria-pressed="${S.rt.mode === "nhi"}" ${nhiOk ? "" : "disabled"} title="${nhiOk ? "" : "requires qualified pair and available lease"}">nhi</button>
+            <button data-set="rt.mode" data-val="portable" aria-pressed="${S.rt.mode === "portable"}">Standard USB4</button>
+            <button data-set="rt.mode" data-val="nhi" aria-pressed="${S.rt.mode === "nhi"}" ${nhiOk ? "" : "disabled"} title="${nhiOk ? "" : "requires a verified fast connection that is not already in use"}">Fast USB4 (NHI)</button>
           </div>
           <span class="hint">automatic selects NHI only when qualified with a free lease</span></div>
       </div>
@@ -934,16 +1084,18 @@ function renderDrawer() {
 
 function renderView() {
   const v = S.view;
+  document.body.dataset.view = v;
   $$(".tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.view === v)));
   const p = pairReport();
   const ctx = {
-    pair: p ? `pair <b>${esc(p.host_a)} ↔ ${esc(p.host_b)}</b> · identity ${p.pair_identity_valid ? "valid" : "invalid"}` : "pair not reconciled",
-    setup: "preview-first · nothing is installed from the browser",
-    test: "route gate → RTT → throughput → integrity → reconnect",
-    runtime: "generic is the default · overlays never own the link",
+    pair: "",
+    setup: "No automatic changes",
+    test: "Runs only when you start a test",
+    runtime: "Settings export only",
+    diagnostics: p ? `pair identity ${p.pair_identity_valid ? "verified" : "not verified"}` : "Status unavailable",
   };
   $("#tabs-ctx").innerHTML = ctx[v] || "";
-  $("#main").innerHTML = { pair: vPair, setup: vSetup, test: vTest, runtime: vRuntime }[v]();
+  $("#main").innerHTML = { pair: vPair, setup: vSetup, test: vTest, runtime: vRuntime, diagnostics: vDiagnostics }[v]();
 }
 
 function setPath(obj, path, val) {
@@ -991,7 +1143,8 @@ document.addEventListener("click", async (ev) => {
   const act = el.dataset.act;
   try {
     if (act === "refresh") { await refreshAll(false); }
-    else if (act === "goto") { S.view = el.dataset.view; renderView(); }
+    else if (act === "history-metric") { S.historyMetric = el.dataset.historyMetric === "pp" ? "pp" : "tg"; renderModelPanel(); }
+    else if (act === "goto") { S.view = el.dataset.view; history.replaceState(null, "", "#/" + S.view); renderView(); }
     else if (act === "activity") { await openDrawer(); }
     else if (act === "activity-close") { $("#drawer").hidden = true; }
     else if (act === "download") {
@@ -999,6 +1152,9 @@ document.addEventListener("click", async (ev) => {
     }
     else if (act === "endpoint-plan") { await loadEndpointPlan(el.dataset.arg); }
     else if (act === "expand-endpoints") {
+      S.view = "diagnostics";
+      history.replaceState(null, "", "#/diagnostics");
+      renderView();
       ["endpoints-a", "endpoints-b"].forEach((id) => { const d = document.getElementById(id); if (d) d.open = true; });
       const d = document.getElementById("endpoints-b") || document.getElementById("endpoints-a");
       if (d) d.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1050,8 +1206,8 @@ document.addEventListener("change", (ev) => {
 
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && !$("#drawer").hidden) $("#drawer").hidden = true;
-  if (ev.altKey && ["1", "2", "3", "4"].includes(ev.key)) {
-    S.view = ["pair", "setup", "test", "runtime"][Number(ev.key) - 1];
+  if (ev.altKey && ["1", "2", "3", "4", "5"].includes(ev.key)) {
+    S.view = ["pair", "setup", "test", "runtime", "diagnostics"][Number(ev.key) - 1];
     renderView();
   }
 });

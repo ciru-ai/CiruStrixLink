@@ -262,7 +262,10 @@ func collectHost(toolVersion, iface, peer string) HostPayload {
 		p.Probe = &probe
 		halo = probe.StrixHaloLikely
 	}
-	tr := transport.Inspect(toolVersion, iface, peer)
+	tr, err := inspectTransportForUI(toolVersion, iface, peer)
+	if err != nil {
+		p.Errors["transport_helper"] = err.Error()
+	}
 	p.Transport = &tr
 	kernel := pre.System.Kernel
 	if kernel == "" {

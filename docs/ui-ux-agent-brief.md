@@ -1,8 +1,8 @@
 # CiruStrixLink UI/UX agent brief
 
-Status: current v0.1 product requirements  
-Audience: UI/UX designer and frontend implementation agent  
-Source of truth: CiruStrixLink JSON and command results, not duplicated UI logic
+- Status: current v0.2 product requirements
+- Audience: UI/UX designer and frontend implementation agent
+- Source of truth: CiruStrixLink JSON and command results, not duplicated UI logic
 
 ## Product objective
 

@@ -10,7 +10,7 @@
 - Added two-sided portable/NHI transport reports, reconciliation, endpoint
   lifecycle control, and launcher environment generation.
 - Added the production integration guide for
-  **GLM5.3 Flash CIRU STRIX UI4**.
+  **GLM5.3 Flash CIRU STRIX IU4**.
 - Added public Linux release installation instructions.
 
 ## 0.1.0

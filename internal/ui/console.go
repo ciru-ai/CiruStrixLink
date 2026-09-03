@@ -36,6 +36,7 @@ type ConsoleConfig struct {
 	Token     string
 	ReportA   string // transport report file for endpoint A (requires ReportB)
 	ReportB   string // transport report file for endpoint B (requires ReportA)
+	ModelURL  string // optional read-only OpenAI-compatible model frontend
 }
 
 // ConsoleURL is one address the console is reachable at.
@@ -102,13 +103,14 @@ type Console struct {
 	mux       *http.ServeMux
 	static    fs.FS
 	indexHTML []byte
+	model     *modelMonitor
 }
 
 // NewConsole builds the console. In report-file pair mode both reports are
 // validated up front so a bad path fails at startup.
 func NewConsole(cfg ConsoleConfig) (*Console, error) {
 	if cfg.Addr == "" {
-		cfg.Addr = "0.0.0.0"
+		cfg.Addr = "127.0.0.1"
 	}
 	if cfg.Port == 0 {
 		cfg.Port = DefaultConsolePort
@@ -140,9 +142,14 @@ func NewConsole(cfg ConsoleConfig) (*Console, error) {
 		client: &http.Client{Timeout: peerTimeout}, static: sub, indexHTML: index,
 	}
 	c.hostname, _ = os.Hostname()
+	c.model, err = newModelMonitor(cfg.ModelURL, os.Getenv("CIRU_STRIXLINK_MODEL_TOKEN"), c.hostname)
+	if err != nil {
+		return nil, err
+	}
 	c.urls = consoleURLs(cfg.Addr, cfg.Port)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", c.handleHealth)
+	mux.HandleFunc("GET /api/model", c.handleModel)
 	mux.HandleFunc("GET /api/host/local", c.handleHostLocal)
 	mux.HandleFunc("GET /api/host/peer", c.handleHostPeer)
 	mux.HandleFunc("POST /api/refresh", c.handleRefresh)
@@ -174,6 +181,9 @@ func (c *Console) filesMode() bool { return c.cfg.ReportA != "" }
 // consoleURLs enumerates loopback, every non-loopback LAN IPv4, and the USB4
 // interface address (when present) as full URLs.
 func consoleURLs(addr string, port int) []ConsoleURL {
+	if addr == "127.0.0.1" {
+		return []ConsoleURL{{Label: "loopback", URL: fmt.Sprintf("http://127.0.0.1:%d", port)}}
+	}
 	if addr != "" && addr != "0.0.0.0" && addr != "::" {
 		return []ConsoleURL{{Label: "console", URL: fmt.Sprintf("http://%s:%d", addr, port)}}
 	}

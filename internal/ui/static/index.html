@@ -7,7 +7,7 @@
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="stylesheet" href="styles.css">
 </head>
-<body>
+<body data-view="pair">
 <a class="skip" href="#main">Skip to main content</a>
 
 <header class="shell" id="shell">
@@ -22,7 +22,7 @@
     <div class="host-chips" id="host-chips"></div>
     <button class="btn btn-primary" id="btn-refresh" data-act="refresh" title="Re-collect reports from both hosts">
       <svg viewBox="0 0 16 16" class="ic"><path d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89M13.5 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Refresh both hosts
+      Refresh status
     </button>
     <button class="btn btn-ghost btn-ic" id="btn-activity" data-act="activity" title="Activity log" aria-label="Activity log">
       <svg viewBox="0 0 16 16" class="ic"><path d="M2 3.5h12M2 8h12M2 12.5h7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
@@ -38,10 +38,11 @@
 </header>
 
 <nav class="tabs" id="tabs" role="tablist" aria-label="Console views">
-  <button class="tab" role="tab" data-view="pair" aria-selected="true">Pair</button>
-  <button class="tab" role="tab" data-view="setup" aria-selected="false">Setup</button>
-  <button class="tab" role="tab" data-view="test" aria-selected="false">Test</button>
-  <button class="tab" role="tab" data-view="runtime" aria-selected="false">Runtime</button>
+  <button class="tab" role="tab" data-view="pair" aria-selected="true">Overview</button>
+  <button class="tab" role="tab" data-view="setup" aria-selected="false">Connection setup</button>
+  <button class="tab" role="tab" data-view="test" aria-selected="false">Speed test</button>
+  <button class="tab" role="tab" data-view="runtime" aria-selected="false">Launch settings</button>
+  <button class="tab" role="tab" data-view="diagnostics" aria-selected="false">Diagnostics</button>
   <span class="tabs-ctx mono" id="tabs-ctx"></span>
 </nav>
 

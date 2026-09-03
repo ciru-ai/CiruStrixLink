@@ -228,12 +228,68 @@ Then start the console here:
 ciru-strixlink ui --peer 10.77.77.2 --token-file TOKEN_FILE
 ```
 
-`ui` prints every address it is reachable at — loopback, each LAN IPv4, and
-the USB4 link address when the portable link is configured. Open the printed
-LAN address in a browser. The console only collects and previews: setup,
-rollback, install, and endpoint plans are the same dry runs the CLI prints,
-and applying them still requires the reviewed `sudo ... --apply` command. To
-review reports a peer sent over, reconcile files instead of a live agent:
+The console listens only on `127.0.0.1:7749` by default. Open the printed
+loopback address in a browser on that host. To reach it remotely over a trusted
+LAN, opt in explicitly:
+
+```bash
+ciru-strixlink ui --listen 0.0.0.0 --peer 10.77.77.2 --token-file TOKEN_FILE
+```
+
+With the wildcard listener, `ui` prints loopback, LAN IPv4, and configured
+USB4 addresses. Setup, rollback, install, and endpoint actions are preview-only;
+applying them still requires the reviewed `sudo ... --apply` command. The
+console can also start a bounded link benchmark through the peer agent.
+
+The peer token does not authenticate the browser console. On an untrusted LAN,
+keep the default loopback listener and use an authenticated tunnel. Do not
+expose ports 7748, 7749, or 55321 to the public internet. See [Security](SECURITY.md).
+
+If NHI inspection needs root, the console and peer agent can remain ordinary
+user processes. Set `CIRU_STRIXLINK_STATUS_HELPER` on each to an existing scoped
+helper's absolute path. Collection invokes only
+`sudo -n HELPER transport-status` and uses its JSON when it identifies the same
+host, interface, and peer. The existing sudo policy must already allow that
+read-only action; the UI neither grants privileges nor exposes helper commands
+through HTTP. Failed inspection stays visibly unverified.
+
+To show the served model and PP/TG in the Overview, point the console at the
+existing model frontend (not an individual rank in a mirrored TP deployment):
+
+```bash
+ciru-strixlink ui --peer PEER_USB4_ADDRESS --model-url http://127.0.0.1:8083
+```
+
+`CIRU_STRIXLINK_MODEL_URL` is the equivalent environment setting. For an
+authenticated frontend, set `CIRU_STRIXLINK_MODEL_TOKEN` in the console's
+environment. The console only reads `/v1/models` and `/metrics`; it never sends
+prompts or changes the model. The API location is shown using the console host's
+name when the upstream is loopback. Model metrics refresh every five seconds,
+independently of the thirty-second link inspection.
+
+The vLLM display uses one model's engine-0 counters from one frontend, never a
+sum across mirrored ranks. Live output is tokens per polling interval (wall
+time). Completed-request TG excludes prefill and the first generated token;
+PP counts newly computed KV tokens, excluding cached tokens. Before a new request
+finishes, completed-request rates are explicitly labeled "Since engine start";
+afterward they show the last request(s) observed. Unsupported or unavailable
+metrics show a dash, not an invented rate. Link type describes the inspected
+connection; it is not proof that an arbitrary configured model uses that link.
+
+The speed chart retains up to ten minutes of samples in console memory; a page
+refresh keeps that history, while a console restart or model/engine change
+clears it. Generation uses measured output tokens per polling interval, including
+zero output while idle. The prompt-fill view plots completed-request PP samples.
+No model requests are generated to populate either chart.
+
+Draft acceptance is accepted draft tokens divided by proposed draft tokens,
+excluding bonus target tokens. It uses the latest reported counter increment,
+or a clearly labeled since-start total before the first increment. No new drafts
+retain the previous sample and its timestamp, rather than showing zero. Set
+`CIRU_STRIXLINK_MODEL_SPECULATION=DFlash2` to label the existing speculative
+runtime; this is a display label and does not enable or alter speculation.
+
+To review reports a peer sent over, reconcile files instead of a live agent:
 
 ```bash
 ciru-strixlink ui --report-a host-a.transport.json --report-b host-b.transport.json
@@ -337,16 +393,15 @@ The model transport should use:
 Mid-microbatch transparent replay is unsafe unless the model layer can also
 reconstruct both peers' cache and scheduler state.
 
-## GLM5.3 Flash CIRU STRIX UI4
+## GLM5.3 Flash CIRU STRIX IU4
 
-The public model recipe for **GLM5.3 Flash CIRU STRIX UI4** uses
+The public model recipe for **GLM5.3 Flash CIRU STRIX IU4** uses
 CiruStrixLink to qualify the two-host USB4 path, reconcile the portable and NHI
 states, and generate the launcher environment before starting the two TP ranks.
-Follow the [model integration guide](docs/models/GLM5.3-Flash-CIRU-STRIX-UI4.md).
+Follow the [model integration guide](docs/models/GLM5.3-Flash-CIRU-STRIX-IU4.md).
 
-The public display name is `GLM5.3 Flash CIRU STRIX UI4`; scripts and API calls
-use the filesystem-safe ID `GLM5.3-Flash-CIRU-STRIX-UI4`. Internal `IU4`
-symbols are retained only where the compiled kernel ABI requires them.
+The public display name is `GLM5.3 Flash CIRU STRIX IU4`; scripts and API calls
+use the filesystem-safe ID `GLM5.3-Flash-CIRU-STRIX-IU4`.
 
 ## Quality gates
 

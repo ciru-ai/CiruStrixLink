@@ -1,4 +1,4 @@
-# CiruStrixLink UI architecture (v0.1)
+# CiruStrixLink UI architecture (v0.2)
 
 The UI is part of the single binary. `ciru-strixlink ui` starts a local console
 server and prints the addresses to open in a browser. `ciru-strixlink agent`
@@ -12,16 +12,16 @@ lifecycle logic.
 ## Modes
 
 ```text
-ciru-strixlink ui [--addr 0.0.0.0] [--port 7749] [--peer ADDRESS]
+ciru-strixlink ui [--listen 127.0.0.1] [--port 7749] [--peer ADDRESS]
                   [--agent-port 7748] [--token-file PATH]
                   [--report-a REPORT.json --report-b REPORT.json]
 ciru-strixlink agent [--interface auto] [--port 7748] [--token-file PATH]
 ```
 
-- **ui** (console): binds `--addr:--port` (default `0.0.0.0:7749`). On startup
-  prints every address the console is reachable at: loopback, each LAN IPv4,
-  and the USB4 link address when the portable link is configured. The operator
-  opens the printed LAN address in a browser.
+- **ui** (console): binds `--listen:--port` (default `127.0.0.1:7749`). On
+  startup it prints the loopback URL. An operator may explicitly pass
+  `--listen 0.0.0.0` on a trusted LAN; in that mode the console also prints
+  each LAN IPv4 and the USB4 link address when the portable link is configured.
 - **agent**: Linux only, binds exclusively to the local USB4 address (never
   LAN/Wi-Fi). Serves read-only host reports and time-boxed benchmark listener
   coordination. Token auth via `--token-file` or `CIRU_STRIXLINK_TOKEN`
@@ -67,7 +67,7 @@ capability lands in `errors` and the rest of the payload is still served.
 | POST | `/api/agent/serve` | Body `{port,seconds}` -> starts the bench listener bound to the USB4 address for at most `seconds` (hard cap 120), returns when listening; the listener exits afterwards |
 
 The agent never applies anything. Mutations stay CLI-only (`sudo ... --apply`)
-in v0.1; the UI renders exact reviewed commands for the operator to run.
+in v0.2; the UI renders exact reviewed commands for the operator to run.
 
 ### Composite host payload
 

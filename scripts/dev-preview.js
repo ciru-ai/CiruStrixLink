@@ -25,10 +25,10 @@ const exe = path.join(root, "dist", process.platform === "win32" ? "ciru-strixli
 let cmd, args;
 if (fs.existsSync(exe)) {
   cmd = exe;
-  args = ["ui", "--addr", host, "--port", String(port), ...repArgs];
+  args = ["ui", "--listen", host, "--port", String(port), ...repArgs];
 } else {
   cmd = process.platform === "win32" ? "go.exe" : "go";
-  args = ["run", "./cmd/ciru-strixlink", "ui", "--addr", host, "--port", String(port), ...repArgs];
+  args = ["run", "./cmd/ciru-strixlink", "ui", "--listen", host, "--port", String(port), ...repArgs];
 }
 console.log(`[dev-preview] ${cmd} ${args.join(" ")}`);
 const child = spawn(cmd, args, { cwd: root, stdio: "inherit" });

@@ -55,6 +55,30 @@ func newFilesConsole(t *testing.T, a, b transport.Report) *Console {
 	return c
 }
 
+func TestConsoleListenDefaultAndRemoteOverride(t *testing.T) {
+	c, err := NewConsole(ConsoleConfig{Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.cfg.Addr != "127.0.0.1" {
+		t.Fatalf("default listen address = %q, want loopback", c.cfg.Addr)
+	}
+	if got := c.URLs(); len(got) != 1 || got[0].Label != "loopback" || got[0].URL != "http://127.0.0.1:7749" {
+		t.Fatalf("default URLs = %#v", got)
+	}
+
+	remote, err := NewConsole(ConsoleConfig{Version: "test", Addr: "0.0.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remote.cfg.Addr != "0.0.0.0" {
+		t.Fatalf("explicit listen address = %q", remote.cfg.Addr)
+	}
+	if got := remote.URLs(); len(got) == 0 || got[0].URL != "http://127.0.0.1:7749" {
+		t.Fatalf("explicit remote URLs = %#v", got)
+	}
+}
+
 func getJSON(t *testing.T, srv *httptest.Server, path string, wantStatus int) []byte {
 	t.Helper()
 	resp, err := http.Get(srv.URL + path)
