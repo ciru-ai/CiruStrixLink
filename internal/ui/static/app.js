@@ -68,6 +68,7 @@ const S = {
   pairEnv: null,        // {state, reason?, pair?, a?, b?, a_kind?, b_kind?}
   model: null,
   modelBusy: false,
+  launch: { status: null, busy: false, err: null, profile: 2, profileTouched: false, confirmed: false },
   historyMetric: "tg",
   activity: [],
   view: "pair",
@@ -79,14 +80,14 @@ const S = {
   ep: null,             // endpoint plan response
   test: { doctor: null, doctorBusy: false, benchBusy: false, bench: null, benchErr: null, benchStarted: 0,
           form: { port: 55321, duration_s: 5, streams: 4, rtt_samples: 100 } },
-  rt: { mode: "auto", runtime: "generic", env: null, err: null },
 };
 
 /* ---------------- boot ---------------- */
 
 async function boot() {
   const hm = location.hash.match(/^#\/(\w+)(\?(.*))?$/);
-  if (hm && ["pair", "setup", "test", "runtime", "diagnostics"].includes(hm[1])) S.view = hm[1];
+  if (hm && hm[1] === "runtime") history.replaceState(null, "", "#/launch");
+  if (hm && ["pair", "setup", "launch", "test", "diagnostics"].includes(hm[1] === "runtime" ? "launch" : hm[1])) S.view = hm[1] === "runtime" ? "launch" : hm[1];
   const hparams = new URLSearchParams(hm && hm[3] ? hm[3] : "");
   try {
     S.health = await api("/api/health");
@@ -95,18 +96,11 @@ async function boot() {
     return;
   }
   renderShell();
-  await Promise.all([refreshAll(true), refreshModel()]);
+  await Promise.all([refreshAll(true), refreshModel(), refreshLaunch(false)]);
   if (hparams.get("plan")) loadEndpointPlan(hparams.get("plan"));
-  if (hparams.get("env")) {
-    const [m, r] = hparams.get("env").split(":");
-    if (m) S.rt.mode = m;
-    if (r) S.rt.runtime = r;
-    S.view = "runtime";
-    renderView();
-    genEnv();
-  }
   setInterval(tickAges, 5000);
   setInterval(() => { if (!document.hidden) refreshModel(); }, 5000);
+  setInterval(() => { if (!document.hidden) refreshLaunch(S.view === "launch"); }, 10000);
   setInterval(() => { if (!S.busy) refreshAll(true); }, 30000);
 }
 
@@ -145,6 +139,18 @@ async function refreshModel() {
     S.modelBusy = false;
   }
   renderModelPanel();
+}
+
+async function refreshLaunch(render = true) {
+  if (S.launch.busy) return;
+  try {
+    S.launch.status = await api("/api/launch");
+    if (!S.launch.profileTouched && S.launch.status.selected_profile) S.launch.profile = S.launch.status.selected_profile;
+    S.launch.err = null;
+  } catch (e) {
+    S.launch.err = e.message + (e.detail ? " — " + e.detail : "");
+  }
+  if (render && S.view === "launch") renderView();
 }
 
 function renderModelPanel() {
@@ -203,12 +209,12 @@ function deriveState() {
   if (p.nhi_in_use) {
     return { key: "in-use", tone: "live", title: "Fast USB4 is in use",
       sub: "Both computers are connected, and a workload has the fast connection open. No connection changes are needed.",
-      primary: { label: "See what's using it", act: "expand-endpoints", kind: "primary" } };
+      primary: { label: "Open Launch", act: "goto", view: "launch", kind: "primary" } };
   }
   if (p.nhi_status === "ready" && p.lease_available) {
     return { key: "ready", tone: "ok", title: "Fast USB4 is ready",
       sub: "Both computers are connected. The fast connection is set up and available for your model to use.",
-      primary: { label: "View launch settings", act: "goto", view: "runtime", kind: "primary" } };
+      primary: { label: "Open Launch", act: "goto", view: "launch", kind: "primary" } };
   }
   if (p.arm_allowed) {
     return { key: "arm", tone: "warn", title: "Connected. Fast USB4 needs setup.",
@@ -217,7 +223,7 @@ function deriveState() {
   }
   return { key: "portable", tone: "ok", title: "Standard USB4 is ready",
     sub: "The normal cable connection works. Fast mode is not confirmed available; your model can use the standard connection instead.",
-    primary: { label: "View launch settings", act: "goto", view: "runtime", kind: "primary" } };
+    primary: { label: "Open Launch", act: "goto", view: "launch", kind: "primary" } };
 }
 
 /* ---------------- shell ---------------- */
@@ -372,7 +378,7 @@ function plate(side, rep, payload, kind) {
   const addr = rep ? rep.local_address : "";
   const peer = rep ? rep.peer : "";
   const stale = rep && rep.generated_at ? "" : "";
-  const priv = payload ? (payload.privileged ? '<span class="st ok">root inspection</span>' : '<span class="st warn">user — limited</span>') : "";
+  const priv = kind === "helper" ? '<span class="st ok">scoped inspection</span>' : payload ? (payload.privileged ? '<span class="st ok">root inspection</span>' : '<span class="st warn">user — limited</span>') : "";
   const src = kind === "file" ? '<span class="st off">report file</span>' : "";
   const missing = !rep;
   return `<section class="plate" aria-label="Host ${side.toUpperCase()}">
@@ -380,7 +386,7 @@ function plate(side, rep, payload, kind) {
       <img class="plate-emblem" src="assets/emblem.png" alt="">
       <div class="plate-id">
         <div class="plate-host">${esc(name)}</div>
-        <div class="plate-role">host ${side} ${kind === "file" ? "· report file" : kind === "agent" ? "· via peer agent" : "· this console"}</div>
+        <div class="plate-role">host ${side} ${kind === "file" ? "· report file" : kind === "helper" ? side === "a" ? "· scoped local helper" : "· scoped peer helper" : kind === "agent" ? "· via peer agent" : "· this console"}</div>
       </div>
     </div>
     <dl class="plate-meta">
@@ -502,7 +508,7 @@ function vPair() {
   const inUse = !!(connected && p.nhi_in_use);
   const ready = st.key === "ready";
   const nextTitle = inUse ? "No connection changes needed" : ready ? "Ready for your model" : "What to do next";
-  const nextNote = inUse ? "Keep this connection as it is. Open Diagnostics if you want to see which process is using it." : ready ? "Use fast USB4 (NHI) in your model launcher. StrixLink provides the settings; it does not start or stop the model." : st.sub;
+  const nextNote = inUse ? "Keep this connection as it is, or open Launch to unload the model from both computers." : ready ? "Open Launch to choose the GLM 5.3 memory profile and load it across both computers." : st.sub;
   return `<div class="overview">
     <div class="overview-heading"><span class="overview-eyebrow">Your two-computer link</span><span class="overview-source">${saved ? "Saved report · not live" : "Live status · updates every 30 seconds"}</span></div>
     <section class="overview-hero tone-${st.tone}" aria-labelledby="connection-title">
@@ -1188,49 +1194,89 @@ function vTest() {
     ${benchHtml()}`;
 }
 
-/* ---------------- Runtime view ---------------- */
+/* ---------------- Launch view ---------------- */
 
-function vRuntime() {
-  const p = pairReport();
-  const blocked = p && (p.cleanup_required || p.nhi_status === "partial");
-  const nhiOk = p && p.nhi_status === "ready" && p.lease_available && !p.cleanup_required;
-  const e = S.rt.env;
-  return `<div class="view-head"><h1>Launch settings</h1><span class="sub">connection settings for your model launcher · this does not start a model</span></div>
-    ${!p ? `<div class="banner warn"><div><h3>No reconciled pair</h3><p>Environment generation needs a fresh reconciled pair report.</p></div></div>` : ""}
-    ${blocked ? `<div class="banner bad"><div><h3>Runtime export blocked</h3><p>Partial or mismatched NHI endpoints must be cleaned on both hosts before any environment — portable or NHI — is generated.</p></div></div>` : ""}
-    <div class="sec"><div class="sec-h"><h2>Transport selection</h2></div>
-      <div class="form">
-        <div class="fld"><label>runtime overlay</label>
-          <div class="seg" role="group" aria-label="Runtime">
-            ${["generic", "pytorch", "vllm"].map((r) => `<button data-set="rt.runtime" data-val="${r}" aria-pressed="${S.rt.runtime === r}">${r}</button>`).join("")}
-          </div>
-          <span class="hint">overlays add variables; they do not own the link</span></div>
-        <div class="fld"><label>requested mode</label>
-          <div class="seg" role="group" aria-label="Mode">
-            <button data-set="rt.mode" data-val="auto" aria-pressed="${S.rt.mode === "auto"}">automatic</button>
-            <button data-set="rt.mode" data-val="portable" aria-pressed="${S.rt.mode === "portable"}">Standard USB4</button>
-            <button data-set="rt.mode" data-val="nhi" aria-pressed="${S.rt.mode === "nhi"}" ${nhiOk ? "" : "disabled"} title="${nhiOk ? "" : "requires a verified fast connection that is not already in use"}">Fast USB4 (NHI)</button>
-          </div>
-          <span class="hint">automatic selects NHI only when qualified with a free lease</span></div>
+function launchNode(node, side) {
+  if (!node) return `<section class="launch-node missing"><span class="launch-rank">${side}</span><h3>Second machine</h3><p>Status unavailable</p><span class="st warn">not reporting</span></section>`;
+  const loaded = node.state === "loaded";
+  const tone = loaded ? "ok" : node.state === "stopped" ? "off" : "warn";
+  const state = loaded ? "Loaded" : node.state === "stopped" ? "Unloaded" : node.state.replace(/_/g, " ");
+  const detail = node.competing_model && !loaded ? "Main model is using this host" : node.profile_name ? `${esc(node.profile_name)} profile` : "Profile unknown";
+  const total = Number(node.ram_total_bytes || 0), used = Number(node.ram_used_bytes || 0), available = Number(node.ram_available_bytes || 0);
+  const usedPct = total > 0 ? Math.min(100, Math.max(0, used * 100 / total)) : 0;
+  const gib = (bytes) => (bytes / 1073741824).toFixed(1);
+  const memory = total > 0 ? `<div class="launch-memory ${available / total < .1 ? "tight" : ""}"><div><span>Unified system RAM</span><b>${gib(used)} <small>/ ${gib(total)} GiB</small></b><em>${gib(available)} GiB available</em><small>Host-wide · KV cache ${gib(Number(node.kv_cache_bytes || 0))} GiB</small></div><i aria-hidden="true"><span style="width:${usedPct.toFixed(1)}%"></span></i></div>` : "";
+  return `<section class="launch-node ${loaded ? "loaded" : ""}"><div class="launch-node-head"><div><span class="launch-rank">Rank ${node.rank >= 0 ? node.rank : "?"}</span><h3>${esc(node.hostname || side)}</h3></div><span class="st ${node.competing_model && !loaded ? "warn" : tone}">${esc(node.competing_model && !loaded ? "in use" : state)}</span></div><p>${detail}${node.pid ? ` · PID ${node.pid}` : ""}</p>${memory}</section>`;
+}
+
+function launchPermissionHelp(s) {
+  const locked = (s.blockers || []).some((b) => b.includes("control is locked"));
+  if (!locked) return "";
+  const nodes = [s.local, s.peer].filter(Boolean);
+  const needs = nodes.filter((n) => !n.control_enabled);
+  const statusRows = nodes.map((n) => `<div class="launch-permission-host"><span><b>${esc(n.hostname)}</b><small>Rank ${n.rank} · ${esc(n.username)}</small></span><span class="st ${n.control_enabled ? "ok" : "warn"}">${n.control_enabled ? "Authorized" : "Needs permission"}</span></div>`).join("");
+  const guides = needs.map((n) => {
+    const u = n.username, rank = n.rank;
+    const transportReport = [reportA(), reportB()].find((r) => r && r.hostname === n.hostname);
+    const modelPeer = (transportReport && transportReport.peer) || "PEER_USB4_ADDRESS";
+    const nix = `security.sudo.extraRules = [{\n  users = [ "${u}" ];\n  commands = [{\n    command = "/run/current-system/sw/bin/glm53-nhi-service-control";\n    options = [ "NOPASSWD" ];\n  }];\n}];`;
+    const commands = [`status --user ${u}`, `transport-status --user ${u} --peer ${modelPeer}`, `configure --user ${u} --profile 1`, `configure --user ${u} --profile 2`, `configure --user ${u} --profile 3`, `load --user ${u}`, `unload --user ${u}`];
+    const sudoers = commands.map((a) => `${u} ALL=(root) NOPASSWD: /usr/local/bin/ciru-strixlink model-node ${a}`).join("\n");
+    const restart = n === s.local
+      ? `# On ${n.hostname} (rank ${rank}); open this loopback console locally or through SSH\nciru-strixlink ui --peer ${modelPeer} --token-file TOKEN_FILE --model-url MODEL_FRONTEND_URL --model-control --model-rank ${rank}`
+      : `# On ${n.hostname} (rank ${rank}); binds only to its USB4 interface\nciru-strixlink agent --token-file TOKEN_FILE --model-control --model-rank ${rank} --model-peer ${modelPeer}`;
+    return `<details class="launch-permission-guide"><summary><span>${esc(n.hostname)} · rank ${rank}</span><span>Show setup</span></summary><div>
+      <p><b>NixOS packaged deployment</b> — make sure <span class="mono">glm53-nhi-service-control</span> includes <span class="mono">probe</span>, <span class="mono">transport-status</span>, <span class="mono">start</span>, <span class="mono">stop</span>, and all three <span class="mono">context-*</span> actions. Add this rule to the host configuration, then rebuild:</p>
+      <div class="launch-code"><pre>${esc(nix)}</pre><button class="copy" data-copy="${esc(nix)}">copy</button></div>
+      <details class="launch-permission-alt"><summary>Other Linux distributions</summary><p>Install the current root-owned binary at <span class="mono">/usr/local/bin/ciru-strixlink</span>, validate these exact lines with <span class="mono">visudo</span>, then install them as a mode-0440 sudoers fragment:</p><div class="launch-code"><pre>${esc(sudoers)}</pre><button class="copy" data-copy="${esc(sudoers)}">copy</button></div></details>
+      <p>Finally, restart this host's StrixLink process with the shared token, fixed rank, and fixed peer address:</p><div class="launch-code"><pre>${esc(restart)}</pre><button class="copy" data-copy="${esc(restart)}">copy</button></div>
+    </div></details>`;
+  }).join("");
+  return `<section class="launch-permission"><div class="launch-permission-head"><div><span class="setup-kicker">Permission required</span><h2>Enable model control</h2><p>The page can read model state without administrator access. Loading and unloading use one fixed, allowlisted helper on each headless host—never a general-purpose shell.</p></div></div><div class="launch-permission-status">${statusRows}</div>${guides}</section>`;
+}
+
+function vLaunch() {
+  const l = S.launch, s = l.status;
+  if (!s) return `<div class="launch-page"><div class="view-head"><h1>Launch</h1><span class="sub">GLM 5.3 across both computers</span></div><div class="empty">${l.err ? esc(l.err) : "Reading model state…"}</div></div>`;
+  const loaded = s.state === "loaded", partial = s.state === "partial";
+  const tone = loaded ? "live" : s.state === "unloaded" ? "ok" : partial || s.state === "misconfigured" ? "bad" : "warn";
+  const title = loaded ? "GLM 5.3 is loaded" : s.state === "unloaded" ? "Ready to load GLM 5.3" : s.summary;
+  const action = loaded || partial ? "unload" : "load";
+  const canAct = action === "load" ? s.can_load : s.can_unload;
+  const profileLocked = loaded || partial || l.busy;
+  const actionLabel = l.busy ? (action === "load" ? "Loading both ranks…" : "Unloading both ranks…") : action === "load" ? "Load on both machines" : "Unload from both machines";
+  const profiles = (s.profiles || []).map((p) => `<button class="launch-profile ${p.experimental ? "experimental" : ""}" data-set="launch.profile" data-val="${p.id}" aria-pressed="${Number(l.profile) === p.id}" ${profileLocked ? "disabled" : ""}>
+    <span class="launch-profile-top"><b>${esc(p.name)}</b>${p.recommended ? `<span class="st ok">Recommended</span>` : p.experimental ? `<span class="st warn">Experimental</span>` : ""}</span>
+    <span>${p.context_window.toLocaleString()} tokens</span><small>${Math.round(p.kv_cache_bytes / 1073741824)} GiB KV cache per machine · ${esc(p.note)}</small>
+  </button>`).join("");
+  const allBlockers = [...(s.blockers || [])];
+  const blockers = allBlockers.map((b) => `<li>${esc(b)}</li>`).join("");
+  return `<div class="launch-page">
+    <div class="view-head"><h1>Launch</h1><span class="sub">configure, load, or unload one paired GLM deployment</span></div>
+    <section class="launch-hero tone-${tone}">
+      <div class="launch-hero-copy"><span class="setup-kicker">Current model</span><div class="launch-title"><i aria-hidden="true"></i><h2>${esc(title)}</h2></div><p>${esc(s.summary)}</p>
+        <div class="launch-model-name">${esc(s.model.name.replace(/-/g, " "))}</div><div class="launch-model-meta"><span>${esc(s.model.topology)}</span><span>${esc(s.model.transport)}</span></div>
       </div>
-      <div class="row mt16">
-        <button class="btn btn-primary" data-act="env" ${!p || blocked ? "disabled" : ""}>Generate environment</button>
-        ${S.rt.err ? `<span style="color:var(--red);font-size:12px">${esc(S.rt.err)}</span>` : ""}
-      </div>
+      <div class="launch-pair">${launchNode(s.local, "This machine")}<div class="launch-join"><span>one model</span><i></i><b>TP2</b><i></i></div>${launchNode(s.peer, "Second machine")}</div>
+    </section>
+    ${l.err ? `<div class="banner bad"><div><h3>Launch action failed</h3><p>${esc(l.err)}</p></div></div>` : ""}
+    ${launchPermissionHelp(s)}
+    <div class="launch-grid">
+      <section class="launch-panel"><div class="launch-panel-head"><div><span class="setup-kicker">1 · Memory profile</span><h2>Choose the context window</h2></div>${loaded ? `<span class="st live">Change after unload</span>` : ""}</div>
+        <p class="launch-intro">The same profile is written to both ranks before loading. The validated 128K profile is the best default.</p><div class="launch-profiles" role="group" aria-label="Context profile">${profiles}</div>
+      </section>
+      <section class="launch-panel"><div class="launch-panel-head"><div><span class="setup-kicker">2 · Validated recipe</span><h2>Runtime parameters</h2></div><span class="st off">Fixed together</span></div>
+        <p class="launch-intro">These values belong to the tested GLM build and stay locked so the two ranks cannot drift.</p>
+        <dl class="launch-specs"><div><dt>Parallel layout</dt><dd>TP2 · 1 rank per machine</dd></div><div><dt>Speculative decode</dt><dd>DFlash2 · 7 tokens</dd></div><div><dt>Concurrent requests</dt><dd>${s.model.max_sequences}</dd></div><div><dt>Batch token limit</dt><dd>${s.model.max_batched_tokens.toLocaleString()}</dd></div><div><dt>Prefix cache</dt><dd>${s.model.prefix_cache ? "Enabled · memory + NVMe" : "Disabled"}</dd></div><div><dt>Transport</dt><dd>Direct USB4 · NHI</dd></div></dl>
+      </section>
     </div>
-    ${e ? `<div class="sec"><div class="sec-h"><h2>Generated environment</h2></div>
-      <div class="plan"><div class="plan-h"><span class="t">mode <b class="mono">${esc(e.environment.mode)}</b> · runtime <b class="mono">${esc(e.environment.runtime)}</b></span>
-        <span class="st ${e.environment.mode === "nhi" ? "ok" : "live"}">${e.environment.mode === "nhi" ? "accelerated" : "portable"}</span></div>
-        <div class="plan-body">
-          <table class="env-table">${Object.entries(e.environment.variables || {}).map(([k, v]) => `<tr><td class="ek">${esc(k)}</td><td class="ev">${esc(v)}</td></tr>`).join("")}</table>
-          <pre class="dotenv">${esc(e.dotenv)}</pre>
-          <div class="row mt8">
-            <button class="btn" data-act="env-copy">Copy environment</button>
-            <button class="btn btn-ghost" data-act="env-save">Save .env file</button>
-          </div>
-          ${e.environment.mode === "nhi" ? `<p class="dim" style="font-size:11.5px;margin:10px 0 0">Grant <span class="mono">CAP_SYS_RAWIO</span> only to the runtime process that imports the NHI device.</p>` : ""}
-        </div></div>
-    </div>` : ""}`;
+    <section class="launch-action tone-${tone}"><div class="launch-action-copy"><span class="setup-kicker">3 · Paired action</span><h2>${action === "load" ? "Load the model" : "Unload the model"}</h2><p>${action === "load" ? `Applies the ${esc((s.profiles || []).find((p) => p.id === Number(l.profile))?.name || "selected")} profile to both machines, then starts rank 0 followed by rank 1.` : "Stops rank 1 and rank 0 as one operation. The lightweight API frontend can remain available while the weights are unloaded."}</p>
+        ${blockers ? `<ul class="launch-blockers">${blockers}</ul>` : ""}
+      </div><div class="launch-action-controls"><label class="launch-confirm"><input type="checkbox" data-set="launch.confirmed" ${l.confirmed ? "checked" : ""} ${!canAct || l.busy ? "disabled" : ""}><span>I understand this changes both machines together.</span></label>
+        <button class="btn ${action === "load" ? "btn-primary" : "btn-danger"} launch-main-action" data-act="launch-action" data-launch-action="${action}" ${!canAct || !l.confirmed || l.busy ? "disabled" : ""}>${esc(actionLabel)}</button>
+        <button class="btn btn-ghost" data-act="launch-refresh" ${l.busy ? "disabled" : ""}>Refresh model state</button></div>
+    </section>
+  </div>`;
 }
 
 /* ---------------- activity drawer ---------------- */
@@ -1259,12 +1305,12 @@ function renderView() {
   const ctx = {
     pair: "",
     setup: "No automatic changes",
+    launch: S.launch.status ? S.launch.status.state.replace(/_/g, " ") + " · paired control" : "Reading model state",
     test: "Runs only when you start a test",
-    runtime: "Settings export only",
     diagnostics: p ? `pair identity ${p.pair_identity_valid ? "verified" : "not verified"}` : "Status unavailable",
   };
   $("#tabs-ctx").innerHTML = ctx[v] || "";
-  $("#main").innerHTML = { pair: vPair, setup: vSetup, test: vTest, runtime: vRuntime, diagnostics: vDiagnostics }[v]();
+  $("#main").innerHTML = { pair: vPair, setup: vSetup, launch: vLaunch, test: vTest, diagnostics: vDiagnostics }[v]();
 }
 
 function setPath(obj, path, val) {
@@ -1317,6 +1363,7 @@ document.addEventListener("click", async (ev) => {
   const seg = ev.target.closest("[data-set]");
   if (seg && seg.tagName === "BUTTON") {
     setPath(S, seg.dataset.set, seg.dataset.val);
+    if (seg.dataset.set.startsWith("launch.")) { S.launch.profileTouched = true; S.launch.confirmed = false; }
     invalidateSetupPreview(seg.dataset.set);
     renderView();
     return;
@@ -1325,7 +1372,7 @@ document.addEventListener("click", async (ev) => {
   if (!el || el.disabled) return;
   const act = el.dataset.act;
   try {
-    if (act === "refresh") { await refreshAll(false); }
+    if (act === "refresh") { await Promise.all([refreshAll(false), refreshLaunch(false)]); }
     else if (act === "setup-jump") {
       const target = document.getElementById(el.dataset.target);
       if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1376,9 +1423,8 @@ document.addEventListener("click", async (ev) => {
     }
     else if (act === "bench") { await doBench(); }
     else if (act === "bench-download") { download("ciru-strixlink-benchmark.json", JSON.stringify(S.test.bench, null, 2) + "\n"); }
-    else if (act === "env") { await genEnv(); }
-    else if (act === "env-copy" && S.rt.env) { copyText(S.rt.env.dotenv, el); }
-    else if (act === "env-save" && S.rt.env) { download("ciru-strixlink.env", S.rt.env.dotenv, "text/plain"); }
+    else if (act === "launch-refresh") { await refreshLaunch(true); }
+    else if (act === "launch-action") { await doLaunchAction(el.dataset.launchAction); }
   } catch (e) {
     announce("Action failed: " + e.message);
   }
@@ -1403,19 +1449,26 @@ document.addEventListener("change", (ev) => {
 document.addEventListener("keydown", (ev) => {
   if (ev.key === "Escape" && !$("#drawer").hidden) $("#drawer").hidden = true;
   if (ev.altKey && ["1", "2", "3", "4", "5"].includes(ev.key)) {
-    S.view = ["pair", "setup", "test", "runtime", "diagnostics"][Number(ev.key) - 1];
+    S.view = ["pair", "setup", "launch", "test", "diagnostics"][Number(ev.key) - 1];
     renderView();
   }
 });
 
-async function genEnv() {
-  S.rt.err = null;
+async function doLaunchAction(action) {
+  const l = S.launch;
+  l.busy = true; l.err = null;
+  renderView();
   try {
-    S.rt.env = await api("/api/env", { body: { mode: S.rt.mode, runtime: S.rt.runtime } });
-    announce("Environment generated: " + S.rt.env.environment.mode);
+    const result = await api("/api/launch", { body: { action, profile: Number(l.profile), confirmed: true } });
+    l.status = result.status;
+    l.confirmed = false;
+    announce(result.summary);
+    await Promise.all([refreshModel(), refreshAll(true)]);
   } catch (e) {
-    S.rt.env = null;
-    S.rt.err = e.message + (e.detail ? " — " + e.detail : "");
+    l.err = e.message + (e.detail ? " — " + e.detail : "");
+    announce("Launch action failed: " + e.message);
+  } finally {
+    l.busy = false;
   }
   renderView();
 }

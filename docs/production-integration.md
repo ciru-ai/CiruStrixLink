@@ -25,6 +25,43 @@ The coordinator owns concurrency and remote execution. CiruStrixLink owns every
 host mutation and every readiness decision. This separates SSH, systemd, a
 future GUI, or another fleet controller from kernel-specific sysfs details.
 
+## Optional paired GLM control
+
+Version 0.3.0 adds an opt-in control plane for the fixed
+`GLM5.3-Flash-CIRU-STRIX-IU4` deployment. It is separate from the model-neutral
+transport contract above and remains disabled unless both the console and peer
+agent receive `--model-control`.
+
+The console must run on one model host with a loopback listener, fixed rank,
+fixed USB4 peer, shared token, and model frontend URL. The other model host runs
+the USB4-bound agent with the same token, its complementary rank, and the
+console host's fixed USB4 address. A remote desktop reaches the loopback console
+through an authenticated tunnel; it does not run the privileged helper.
+
+The coordinator uses this transaction:
+
+1. Inspect both fixed system units and reject missing or duplicate ranks.
+2. Reject load while a selector-owned main model or portable GLM unit is
+   active on either host.
+3. Obtain scoped privileged transport reports from both hosts and require a
+   qualified, available NHI pair.
+4. Configure the selected profile on both stopped ranks.
+5. Start rank 0, then rank 1.
+6. Poll both units and the model frontend for up to 150 seconds. Success
+   requires the frontend to report the exact selected context.
+7. If rank 1 or readiness fails, stop rank 1 and rank 0 and report any
+   incomplete rollback.
+
+Unload runs in the reverse rank order. The console holds a single-flight lock
+for the pair, each agent holds a local single-flight lock, and the bounded
+operation context is independent of the browser connection.
+
+On generic Linux, `/usr/local/bin/ciru-strixlink model-node` is the privileged
+boundary. Sudoers must enumerate the exact status, transport-status, three
+configure, load, and unload commands for the local service user. On the
+packaged NixOS path, use the root-owned `glm53-nhi-service-control` wrapper.
+Neither path accepts an arbitrary service name or shell command.
+
 ## Migration from the GLM helper
 
 The existing `_ops/nhi-persistence` scripts and `vllm-nhi-tp` service encode a

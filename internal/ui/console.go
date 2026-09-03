@@ -28,15 +28,17 @@ var staticFS embed.FS
 
 // ConsoleConfig configures the browser console server.
 type ConsoleConfig struct {
-	Version   string
-	Addr      string
-	Port      int
-	Peer      string // peer USB4 address; empty disables live peer collection
-	AgentPort int
-	Token     string
-	ReportA   string // transport report file for endpoint A (requires ReportB)
-	ReportB   string // transport report file for endpoint B (requires ReportA)
-	ModelURL  string // optional read-only OpenAI-compatible model frontend
+	Version      string
+	Addr         string
+	Port         int
+	Peer         string // peer USB4 address; empty disables live peer collection
+	AgentPort    int
+	Token        string
+	ReportA      string // transport report file for endpoint A (requires ReportB)
+	ReportB      string // transport report file for endpoint B (requires ReportA)
+	ModelURL     string // optional read-only OpenAI-compatible model frontend
+	ModelControl bool   // explicitly enable paired GLM lifecycle actions
+	ModelRank    *int   // fixed TP rank for model control; nil allows status-only inference
 }
 
 // ConsoleURL is one address the console is reachable at.
@@ -104,6 +106,8 @@ type Console struct {
 	static    fs.FS
 	indexHTML []byte
 	model     *modelMonitor
+	launch    *launchController
+	launchMu  sync.Mutex
 }
 
 // NewConsole builds the console. In report-file pair mode both reports are
@@ -146,10 +150,13 @@ func NewConsole(cfg ConsoleConfig) (*Console, error) {
 	if err != nil {
 		return nil, err
 	}
+	c.launch = newLaunchController(cfg.ModelControl, cfg.ModelRank, cfg.Peer)
 	c.urls = consoleURLs(cfg.Addr, cfg.Port)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", c.handleHealth)
 	mux.HandleFunc("GET /api/model", c.handleModel)
+	mux.HandleFunc("GET /api/launch", c.handleLaunchStatus)
+	mux.HandleFunc("POST /api/launch", c.handleLaunchAction)
 	mux.HandleFunc("GET /api/host/local", c.handleHostLocal)
 	mux.HandleFunc("GET /api/host/peer", c.handleHostPeer)
 	mux.HandleFunc("POST /api/refresh", c.handleRefresh)
@@ -354,6 +361,27 @@ func (c *Console) reconcileReports(local HostPayload, peerRaw json.RawMessage, p
 	return pairEnvelope{State: "ok", Pair: &p, A: local.Transport, B: pp.Transport, AKind: "local", BKind: "agent"}
 }
 
+// preferPrivilegedPair replaces only the transport decision reports when the
+// loopback console already has the explicitly enabled, token-protected model
+// control channel. Host inventory and prerequisite collection remain
+// unprivileged. This keeps Overview, Diagnostics, and Launch on one Fast Link
+// truth without granting the browser a general privileged command path.
+func (c *Console) preferPrivilegedPair(r *http.Request, fallback pairEnvelope) pairEnvelope {
+	if c.filesMode() || !c.cfg.ModelControl || c.cfg.Token == "" || c.cfg.Peer == "" {
+		return fallback
+	}
+	local, err := c.launch.transport(r.Context())
+	if err != nil {
+		return fallback
+	}
+	peer, state, _ := c.fetchPeerLaunchTransport(r)
+	if state != "ok" {
+		return fallback
+	}
+	pair := transport.Reconcile(local, peer)
+	return pairEnvelope{State: "ok", Pair: &pair, A: &local, B: &peer, AKind: "helper", BKind: "helper"}
+}
+
 func (c *Console) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	pairSource := "live"
 	if c.filesMode() {
@@ -402,7 +430,7 @@ func (c *Console) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if c.cfg.Peer != "" {
 		peerRaw, state, detail = c.fetchPeerHost(r)
 	}
-	pairEnv := c.reconcileReports(local, peerRaw, state)
+	pairEnv := c.preferPrivilegedPair(r, c.reconcileReports(local, peerRaw, state))
 	var peerView any = peerState{State: "no_peer", Detail: "start the console with --peer PEER_USB4_ADDRESS and run ciru-strixlink agent on the peer"}
 	if state != "" {
 		peerView = peerState{State: state, Detail: detail}
@@ -441,7 +469,7 @@ func (c *Console) handlePair(w http.ResponseWriter, r *http.Request) {
 		if c.cfg.Peer != "" {
 			peerRaw, state, _ = c.fetchPeerHost(r)
 		}
-		pairEnv = c.reconcileReports(local, peerRaw, state)
+		pairEnv = c.preferPrivilegedPair(r, c.reconcileReports(local, peerRaw, state))
 	}
 	writeJSON(w, http.StatusOK, pairEnv)
 }

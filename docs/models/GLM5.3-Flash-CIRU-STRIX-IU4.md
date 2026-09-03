@@ -17,7 +17,7 @@ only to identify compatible hardware and software.
 
 ## 1. Install the bundled CiruStrixLink release on both hosts
 
-The model repository includes the qualified CiruStrixLink 0.2.0 archive. Use an
+The model repository includes the qualified CiruStrixLink 0.3.0 archive. Use an
 isolated Python environment for the Hugging Face CLI, then extract the bundled
 binary:
 
@@ -27,7 +27,7 @@ python3 -m venv "$HF_ENV"
 "$HF_ENV/bin/pip" install -U huggingface_hub
 HF="$HF_ENV/bin/hf"
 
-VERSION=0.2.0
+VERSION=0.3.0
 MODEL_REPO=jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4
 mkdir -p /tmp/ciru-strixlink-release
 "$HF" download "$MODEL_REPO" \
@@ -54,6 +54,62 @@ ciru-strixlink agent --token-file TOKEN_FILE
 # On the host where you will open the browser:
 ciru-strixlink ui --peer PEER_USB4_ADDRESS --token-file TOKEN_FILE
 ```
+
+The Launch page can also coordinate this fixed GLM deployment as one TP2
+service. Model control is off by default. Enable it only with a shared token
+and keep the console on loopback.
+
+On the packaged NixOS deployment, use the root-owned
+`/run/current-system/sw/bin/glm53-nhi-service-control` wrapper. It allowlists
+only `probe`, `transport-status`, `start`, `stop`, and the three
+`context-64k|128k|256k` actions. Grant that wrapper `NOPASSWD` access through
+`security.sudo.extraRules`. The
+Launch page shows a copyable host-specific example whenever this permission is
+missing.
+
+On another Linux distribution, grant the service user only the exact helper
+commands below. Replace `USER` with the login name on that machine and repeat
+the policy on both hosts:
+
+```text
+USER ALL=(root) NOPASSWD: /usr/local/bin/ciru-strixlink model-node status --user USER
+USER ALL=(root) NOPASSWD: /usr/local/bin/ciru-strixlink model-node transport-status --user USER --peer OTHER_RANK_USB4_IP
+USER ALL=(root) NOPASSWD: /usr/local/bin/ciru-strixlink model-node configure --user USER --profile 1
+USER ALL=(root) NOPASSWD: /usr/local/bin/ciru-strixlink model-node configure --user USER --profile 2
+USER ALL=(root) NOPASSWD: /usr/local/bin/ciru-strixlink model-node configure --user USER --profile 3
+USER ALL=(root) NOPASSWD: /usr/local/bin/ciru-strixlink model-node load --user USER
+USER ALL=(root) NOPASSWD: /usr/local/bin/ciru-strixlink model-node unload --user USER
+```
+
+Install that as a root-owned sudoers fragment with mode `0440`, then start the
+USB4-only agent and loopback console with the opt-in flag:
+
+```bash
+# Peer machine; listener remains bound to its dedicated USB4 address.
+ciru-strixlink agent --token-file TOKEN_FILE --model-control --model-rank 1 \
+  --model-peer OTHER_RANK_USB4_IP
+
+# Browser machine; reach this loopback listener locally or through SSH.
+ciru-strixlink ui --peer PEER_USB4_ADDRESS \
+  --token-file TOKEN_FILE --model-url MODEL_FRONTEND_URL \
+  --model-control --model-rank 0
+```
+
+Use the ranks configured in the model's node files; the example assumes the
+browser machine is rank 0. The explicit rank keeps cold-start orchestration
+unambiguous even when no model process is running to inspect. Model control
+also requires a fixed IPv4 peer on each process, a shared token, a model
+frontend URL on the console, and the console's default loopback-only listener.
+
+The helper accepts only this model, the three packaged context profiles, and
+start/stop on its static NHI unit. It never enables a rank at boot and never
+changes, masks, disables, or replaces `qwen-main.service`. The Launch page
+configures both ranks before starting rank 0 and then rank 1; unloading stops
+rank 1 and then rank 0. If rank 1 cannot start, it attempts to stop rank 0
+again and reports the incomplete recovery instead of claiming success.
+Loading is refused while `qwen-main.service` or the portable GLM user unit is
+active, so the selector-owned main model and this NHI deployment cannot compete
+for the same machine memory.
 
 ## 2. Configure and qualify the USB4 network
 
@@ -278,7 +334,7 @@ start both units manually again:
 glm53-context list
 glm53-context 1   # 64K / 6 GiB KV per rank
 glm53-context 2   # 128K / 12 GiB KV per rank
-glm53-context 3   # 256K / 24 GiB KV per rank
+glm53-context 3   # 256K / 8 GiB KV per rank (single-request experimental profile)
 ```
 
 The selector changes only the next-start environment and never starts or

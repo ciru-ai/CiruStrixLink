@@ -1,5 +1,33 @@
 # Validation
 
+## v0.3.0 paired-launch release validation
+
+Date: 2026-09-03.
+
+The complete Go test suite, `go vet`, JavaScript syntax validation, whitespace
+checks, and a static Linux amd64 build passed for the paired-launch release
+candidate. The release adds tests for fixed-unit status parsing, host-wide
+memory reporting, NixOS and generic helper command mapping, complementary-rank
+requirements, competing-model refusal, authorization and confirmation gates,
+and rank-1-before-rank-0 unload order.
+
+The already-running production pair was checked read-only during validation:
+
+| Check | Result |
+|---|---:|
+| Rank 0 / rank 1 system units | active / active |
+| Configured context | 262,272 tokens on both ranks |
+| KV allocation | 8 GiB per rank |
+| Model frontend | connected; exact 262,272-token context reported |
+| Privileged transport reconciliation | `in_use` |
+| NHI endpoint profile | qualified HopID 9/9 on both hosts |
+| Model lifecycle changes during validation | none |
+
+This release validation deliberately did not unload, restart, or reconfigure
+the active model. Paired lifecycle ordering and rollback are covered by the
+automated HTTP/controller tests; live model serving and status collection were
+confirmed without disturbing the user's workload.
+
 ## v0.2.0 release-candidate requalification
 
 Date: 2026-09-02.

@@ -24,7 +24,7 @@ import (
 	"github.com/ciru-ai/CiruStrixLink/internal/ui"
 )
 
-var version = "0.2.0"
+var version = "0.3.0"
 
 type testReport struct {
 	Version       string       `json:"ciru_strixlink_version"`
@@ -55,8 +55,8 @@ Usage:
   ciru-strixlink doctor --peer ADDRESS
   ciru-strixlink serve [--interface thunderbolt0] [--port 55321]
   ciru-strixlink test --peer ADDRESS [--duration 5s] [--streams 4] [--json]
-  ciru-strixlink ui [--listen 127.0.0.1] [--port 7749] [--peer ADDRESS] [--agent-port 7748] [--token-file PATH] [--report-a A.json --report-b B.json]
-  ciru-strixlink agent [--interface auto] [--port 7748] [--token-file PATH]
+  ciru-strixlink ui [--listen 127.0.0.1] [--port 7749] [--peer ADDRESS] [--agent-port 7748] [--token-file PATH] [--model-url URL] [--model-control --model-rank 0|1]
+  ciru-strixlink agent [--interface auto] [--port 7748] [--token-file PATH] [--model-control --model-rank 0|1 --model-peer ADDRESS]
   ciru-strixlink version
 
 Setup is a dry run unless --apply is provided. Run "serve" on one peer, then
@@ -99,6 +99,8 @@ func main() {
 		runUI(os.Args[2:])
 	case "agent":
 		runAgent(os.Args[2:])
+	case "model-node":
+		runModelNode(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -730,6 +732,8 @@ func runUI(args []string) {
 	reportA := fs.String("report-a", "", "endpoint A transport report; requires --report-b")
 	reportB := fs.String("report-b", "", "endpoint B transport report; requires --report-a")
 	modelURL := fs.String("model-url", os.Getenv("CIRU_STRIXLINK_MODEL_URL"), "optional model frontend URL for read-only identity and performance monitoring")
+	modelControl := fs.Bool("model-control", false, "enable paired GLM 5.3 load/unload controls (loopback and shared token required)")
+	modelRank := fs.Int("model-rank", -1, "this host's fixed GLM TP rank (0 or 1; required with --model-control)")
 	_ = fs.Parse(args)
 	if (*reportA == "") != (*reportB == "") {
 		fail(errors.New("--report-a and --report-b must be provided together"))
@@ -738,7 +742,18 @@ func runUI(args []string) {
 	if err != nil {
 		fail(err)
 	}
-	console, err := ui.NewConsole(ui.ConsoleConfig{Version: version, Addr: *listen, Port: *port, Peer: *peer, AgentPort: *agentPort, Token: token, ReportA: *reportA, ReportB: *reportB, ModelURL: *modelURL})
+	if *modelRank < -1 || *modelRank > 1 {
+		fail(errors.New("--model-rank must be 0 or 1"))
+	}
+	var configuredRank *int
+	if *modelRank >= 0 {
+		configuredRank = modelRank
+	}
+	modelPeerIP := net.ParseIP(*peer)
+	if *modelControl && (token == "" || configuredRank == nil || modelPeerIP == nil || modelPeerIP.To4() == nil || *modelURL == "" || (*listen != "127.0.0.1" && *listen != "localhost" && *listen != "::1")) {
+		fail(errors.New("--model-control requires --model-rank 0|1, --peer, --model-url, a shared token, and a loopback-only console listener"))
+	}
+	console, err := ui.NewConsole(ui.ConsoleConfig{Version: version, Addr: *listen, Port: *port, Peer: *peer, AgentPort: *agentPort, Token: token, ReportA: *reportA, ReportB: *reportB, ModelURL: *modelURL, ModelControl: *modelControl, ModelRank: configuredRank})
 	if err != nil {
 		fail(err)
 	}
@@ -775,6 +790,9 @@ func runAgent(args []string) {
 	ifaceName := fs.String("interface", "auto", "USB4NET interface or auto")
 	port := fs.Int("port", ui.DefaultAgentPort, "agent HTTP port")
 	tokenFile := fs.String("token-file", "", "optional shared token file (or CIRU_STRIXLINK_TOKEN)")
+	modelControl := fs.Bool("model-control", false, "enable token-protected GLM 5.3 node controls")
+	modelRank := fs.Int("model-rank", -1, "this host's fixed GLM TP rank (0 or 1; required with --model-control)")
+	modelPeer := fs.String("model-peer", "", "other GLM rank's fixed USB4 IP (required with --model-control)")
 	_ = fs.Parse(args)
 	if runtime.GOOS != "linux" {
 		fail(errors.New("agent is intended for Linux USB4NET peers"))
@@ -790,7 +808,18 @@ func runAgent(args []string) {
 	if token == "" {
 		fmt.Fprintln(os.Stderr, "Warning: peer agent has no token; it remains bound only to the dedicated USB4 address")
 	}
-	agent := ui.NewAgent(ui.AgentConfig{Version: version, Interface: i.Name, LocalIP: localIP, Port: *port, Token: token})
+	if *modelRank < -1 || *modelRank > 1 {
+		fail(errors.New("--model-rank must be 0 or 1"))
+	}
+	var configuredRank *int
+	if *modelRank >= 0 {
+		configuredRank = modelRank
+	}
+	modelPeerIP := net.ParseIP(*modelPeer)
+	if *modelControl && (token == "" || configuredRank == nil || modelPeerIP == nil || modelPeerIP.To4() == nil) {
+		fail(errors.New("--model-control requires --model-rank 0|1, --model-peer IP, and a shared token"))
+	}
+	agent := ui.NewAgent(ui.AgentConfig{Version: version, Interface: i.Name, LocalIP: localIP, Port: *port, Token: token, ModelControl: *modelControl, ModelRank: configuredRank, ModelPeer: *modelPeer})
 	l, err := net.Listen("tcp4", net.JoinHostPort(localIP, fmt.Sprint(*port)))
 	if err != nil {
 		fail(err)
@@ -804,6 +833,24 @@ func runAgent(args []string) {
 		_ = srv.Close()
 	}()
 	if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fail(err)
+	}
+}
+
+func runModelNode(args []string) {
+	if len(args) == 0 {
+		fail(errors.New("model-node requires status, transport-status, configure, load, or unload"))
+	}
+	action := args[0]
+	fs := flag.NewFlagSet("model-node "+action, flag.ExitOnError)
+	serviceUser := fs.String("user", "", "fixed GLM service user")
+	profile := fs.Int("profile", 0, "context profile 1, 2, or 3")
+	peer := fs.String("peer", "", "fixed peer USB4 IPv4 address (transport-status only)")
+	_ = fs.Parse(args[1:])
+	if *serviceUser == "" {
+		fail(errors.New("model-node requires --user"))
+	}
+	if err := ui.RunModelNode(action, *serviceUser, *profile, *peer); err != nil {
 		fail(err)
 	}
 }

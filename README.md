@@ -14,6 +14,35 @@ an IP socket can use the portable transport. The optional NHI transport is also
 model-neutral at the link layer; a runtime needs a small adapter capable of
 importing its DMA-BUF. vLLM is one supported overlay, not the owner of the link.
 
+> **CiruStrixLink 0.3.0** adds the redesigned setup workflow and an opt-in
+> paired Launch page for GLM5.3 Flash CIRU STRIX IU4. See
+> [what changed](#whats-new-in-030) and the [changelog](CHANGELOG.md).
+
+## What's new in 0.3.0
+
+- A guided Connection Setup page replaces the dense configuration form with
+  an ordered two-machine workflow, clear readiness states, and reviewable
+  commands.
+- Launch is now the third tab. It shows both TP ranks, the active context
+  profile, process IDs, host-wide unified-memory use, available memory, and
+  the configured KV allocation on each machine.
+- The console can optionally configure, load, and unload the fixed GLM 5.3
+  deployment as one paired operation. It starts rank 0 before rank 1, stops
+  rank 1 before rank 0, and does not report a successful load until the model
+  frontend serves the exact selected context.
+- Fast-mode status now comes from the same scoped privileged inspection on
+  both hosts when model control is enabled. Overview, Diagnostics, and Launch
+  therefore agree when an NHI pair is ready or already in use.
+- The built-in `model-node` helper gives non-NixOS deployments the same narrow
+  status/configure/load/unload boundary as the packaged NixOS wrapper.
+- Missing permissions now produce copyable, host-specific NixOS and generic
+  Linux instructions inside the Launch page.
+- A browser disconnect no longer abandons an in-progress paired action. The
+  bounded coordinator finishes or runs its rollback path.
+
+Model control remains off by default and does not broaden the ordinary link
+setup, reporting, or benchmark permissions.
+
 ## What it protects against
 
 - accidental RCCL/Gloo traffic over Wi-Fi, LAN, or Tailscale;
@@ -92,7 +121,7 @@ Run this on both Strix Halo hosts. Set `VERSION` to the release you want to
 install:
 
 ```bash
-VERSION=0.2.0
+VERSION=0.3.0
 curl -fL \
   -o /tmp/ciru-strixlink.tar.gz \
   "https://github.com/ciru-ai/CiruStrixLink/releases/download/v${VERSION}/ciru-strixlink-${VERSION}-linux-amd64.tar.gz"
@@ -266,6 +295,99 @@ environment. The console only reads `/v1/models` and `/metrics`; it never sends
 prompts or changes the model. The API location is shown using the console host's
 name when the upstream is loopback. Model metrics refresh every five seconds,
 independently of the thirty-second link inspection.
+
+### Paired GLM launch control
+
+The third tab is a Launch page for the fixed two-rank GLM 5.3 deployment.
+Control is disabled by default. The normal console and agent remain read-only
+until both processes are started with `--model-control`.
+
+The deployment has three parts:
+
+| Location | Process | Network exposure |
+|---|---|---|
+| Model host A | `ciru-strixlink ui` and its local scoped helper | Loopback only |
+| Model host B | `ciru-strixlink agent` and its local scoped helper | Fixed USB4 address only |
+| Desktop | Ordinary browser reached through an SSH tunnel | No StrixLink service required |
+
+Create one mode-0600 token file and place the same value on both model hosts
+through a trusted administrative channel. Give each StrixLink process its
+host's fixed TP rank and the other rank's fixed USB4 IPv4 address.
+
+On the model host that will run the peer agent:
+
+```bash
+ciru-strixlink agent \
+  --token-file TOKEN_FILE \
+  --model-control \
+  --model-rank 1 \
+  --model-peer RANK_0_USB4_ADDRESS
+```
+
+On the model host that will run the console:
+
+```bash
+ciru-strixlink ui \
+  --peer RANK_1_USB4_ADDRESS \
+  --token-file TOKEN_FILE \
+  --model-url http://127.0.0.1:8083 \
+  --model-control \
+  --model-rank 0
+```
+
+The rank numbers may be reversed, but they must be complementary and must
+match the model's node configuration. Model control refuses a non-loopback
+console, a missing model frontend, a missing shared token, or a non-IPv4 peer.
+
+From a desktop, forward the console's loopback port and open the Launch tab:
+
+```bash
+ssh -N -L 7749:127.0.0.1:7749 USER@CONSOLE_MODEL_HOST
+```
+
+Then open `http://127.0.0.1:7749/#/launch`. The desktop does not need the
+StrixLink binary and does not receive model-host privileges.
+
+#### Scoped permissions
+
+On the packaged NixOS deployment, the root-owned
+`/run/current-system/sw/bin/glm53-nhi-service-control` wrapper must allowlist
+`probe`, `transport-status`, `start`, `stop`, and the three
+`context-64k|128k|256k` actions. Grant only that wrapper passwordless access:
+
+```nix
+security.sudo.extraRules = [{
+  users = [ "MODEL_SERVICE_USER" ];
+  commands = [{
+    command = "/run/current-system/sw/bin/glm53-nhi-service-control";
+    options = [ "NOPASSWD" ];
+  }];
+}];
+```
+
+On other Linux distributions, install the current root-owned StrixLink binary
+at `/usr/local/bin/ciru-strixlink` and allow only the exact `model-node`
+commands for that host. The Launch page renders the complete host-specific
+sudoers fragment—including its service user, all three profiles, and fixed
+peer IP—when permission is missing. Validate the fragment with `visudo` and
+install it as a root-owned mode-0440 file.
+
+The helper cannot execute arbitrary commands, choose another unit, change a
+running context, or silently stop a competing model. A paired load:
+
+1. confirms both ranks are installed, stopped, complementary, and authorized;
+2. refuses to proceed while `qwen-main.service` or the portable GLM unit is
+   active on either host;
+3. verifies the NHI pair is qualified and its exclusive lease is available;
+4. writes the selected profile to both stopped ranks;
+5. starts rank 0 and then rank 1;
+6. waits for the model frontend to serve the exact selected context; and
+7. stops both ranks again if startup or readiness fails.
+
+Unload stops rank 1 before rank 0. A browser disconnect does not interrupt the
+bounded paired operation. See the
+[GLM 5.3 deployment guide](docs/models/GLM5.3-Flash-CIRU-STRIX-IU4.md) for the
+complete helper allowlist and model-specific installation procedure.
 
 The vLLM display uses one model's engine-0 counters from one frontend, never a
 sum across mirrored ranks. Live output is tokens per polling interval (wall

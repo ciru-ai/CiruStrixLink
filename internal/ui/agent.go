@@ -18,15 +18,20 @@ import (
 // AgentConfig configures the USB4-bound peer agent. LocalIP must be the
 // selected USB4 interface address; the agent never binds LAN or Wi-Fi.
 type AgentConfig struct {
-	Version   string
-	Interface string
-	LocalIP   string
-	Port      int
-	Token     string
+	Version      string
+	Interface    string
+	LocalIP      string
+	Port         int
+	Token        string
+	ModelControl bool
+	ModelRank    *int
+	ModelPeer    string
 }
 
-// Agent is the read-only peer agent. It is an http.Handler. The agent never
-// applies anything; its only listener is the time-boxed benchmark listener.
+// Agent is the USB4-only peer agent. Status and plan endpoints are read-only;
+// the optional token-protected model-control endpoint can invoke only the
+// fixed GLM lifecycle helper. Its only dynamic listener is the time-boxed
+// benchmark listener.
 type Agent struct {
 	cfg       AgentConfig
 	startedAt time.Time
@@ -34,8 +39,10 @@ type Agent struct {
 	supported bool
 	collectMu sync.Mutex
 	serveMu   sync.Mutex
+	modelMu   sync.Mutex
 	activity  activityLog
 	handler   http.Handler
+	launch    *launchController
 }
 
 // NewAgent builds the agent and wraps every endpoint in bearer-token auth
@@ -46,11 +53,15 @@ func NewAgent(cfg AgentConfig) *Agent {
 	}
 	a := &Agent{cfg: cfg, startedAt: time.Now().UTC(), supported: hostSupported(cfg.Version)}
 	a.hostname, _ = os.Hostname()
+	a.launch = newLaunchController(cfg.ModelControl, cfg.ModelRank, cfg.ModelPeer)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", a.handleHealth)
 	mux.HandleFunc("GET /api/agent/host", a.handleHost)
 	mux.HandleFunc("POST /api/agent/endpoint/plan", a.handleEndpointPlan)
 	mux.HandleFunc("POST /api/agent/serve", a.handleServe)
+	mux.HandleFunc("GET /api/agent/launch", a.handleLaunchStatus)
+	mux.HandleFunc("GET /api/agent/launch/transport", a.handleLaunchTransport)
+	mux.HandleFunc("POST /api/agent/launch/node", a.handleLaunchNode)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, fmt.Errorf("unknown API path %s", r.URL.Path), "")
 	})

@@ -123,16 +123,17 @@ type peerState struct {
 
 // pairEnvelope carries the reconciled pair plus the two per-host transport
 // reports it was built from. a_kind/b_kind record provenance: in live mode A
-// is the console host and B is the peer agent; in files mode both are the
-// loaded report files. When State is "unavailable" only Reason is set.
+// is the console host and B is the peer agent; privileged model-control mode
+// may replace both transport reports with helper output. In files mode both
+// are loaded report files. When State is "unavailable" only Reason is set.
 type pairEnvelope struct {
 	State  string                `json:"state"` // ok or unavailable
 	Reason string                `json:"reason,omitempty"`
 	Pair   *transport.PairReport `json:"pair,omitempty"`
 	A      *transport.Report     `json:"a,omitempty"`
 	B      *transport.Report     `json:"b,omitempty"`
-	AKind  string                `json:"a_kind,omitempty"` // local or file
-	BKind  string                `json:"b_kind,omitempty"` // agent or file
+	AKind  string                `json:"a_kind,omitempty"` // local, helper, or file
+	BKind  string                `json:"b_kind,omitempty"` // agent, helper, or file
 }
 
 type endpointPlanRequest struct {
