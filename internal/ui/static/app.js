@@ -73,6 +73,7 @@ const S = {
   view: "pair",
   busy: false,
   setup: { installPlan: null, installOpts: { optional: false, self: false }, setupPlan: null, rollbackPlan: null,
+           formTouched: false, installTouched: false, rollbackTouched: false,
            form: { role: "a", subnet: "10.77.77.0/30", mtu: 1500, backend: "auto", profile: "ciru-strixlink-usb4", take_over: false },
            rb: { profile: "ciru-strixlink-usb4", restore: "" } },
   ep: null,             // endpoint plan response
@@ -116,6 +117,7 @@ async function refreshAll(quiet) {
   try {
     const r = await api("/api/refresh", { method: "POST" });
     S.local = r.local; S.peer = r.peer; S.pairEnv = r.pair;
+    hydrateSetupDefaults();
   } catch (e) {
     S.pairEnv = { state: "unavailable", reason: e.message };
   } finally {
@@ -757,152 +759,319 @@ const PREREQ_GROUPS = [
   { id: "diag", label: "Optional diagnostics", ids: ["ethtool", "package_manager"] },
   { id: "nhi", label: "Optional NHI acceleration", ids: ["thunderbolt_stream"] },
 ];
-const groupOf = (id) => { const g = PREREQ_GROUPS.find((g) => g.ids.includes(id)); return g ? g.id : "diag"; };
-
 const PR_TONE = (s) => ({ available: "ok", missing: "warn", inactive: "warn", not_detected: "warn", unsupported: "bad", unknown: "off" }[s] || "off");
+const PR_STATUS_LABEL = {
+  available: "Ready",
+  missing: "Missing",
+  inactive: "Inactive",
+  not_detected: "Not found",
+  unsupported: "Unsupported",
+  unknown: "Unknown",
+};
 
-function prereqCell(rep, cid) {
-  if (!rep) return `<td><span class="st off">not collected</span></td>`;
-  const c = (rep.components || []).find((x) => x.id === cid);
-  if (!c) return `<td><span class="st off">n/a</span></td>`;
-  return `<td>
-    <span class="st ${PR_TONE(c.status)}">${esc(c.status.replace(/_/g, " "))}</span>
-    ${c.detected ? `<div class="mono dim" style="font-size:10.5px;margin-top:4px">${esc(c.detected)}</div>` : ""}
-    <div style="font-size:11px;color:var(--ink-1);margin-top:4px;max-width:340px">${esc(c.summary)}</div>
-    ${c.suggested_command ? `<div class="cmdline mt8" style="font-size:10.5px">${esc(c.suggested_command)}<button class="copy" data-copy="${esc(c.suggested_command)}">copy</button></div>` : ""}
-    ${c.help_url && c.status !== "available" ? `<a href="${esc(c.help_url)}" target="_blank" rel="noreferrer" style="font-size:11px;color:var(--ink-1)">open instructions ↗</a>` : ""}
-  </td>`;
+function prereqStats(rep) {
+  const all = (rep && rep.components) || [];
+  const required = all.filter((c) => c.required);
+  const issues = all.filter((c) => c.required && c.status !== "available");
+  return { all, required, issues, ready: Boolean(rep && rep.ready && !issues.length) };
+}
+
+function requirementHtml(c) {
+  const issue = c.status !== "available";
+  return `<div class="requirement ${issue ? "needs-attention" : "is-ready"}">
+    <span class="requirement-mark" aria-hidden="true">${issue ? "!" : "✓"}</span>
+    <div class="requirement-copy">
+      <div class="requirement-title"><strong>${esc(c.label)}</strong>${c.required ? "" : `<span>Optional</span>`}</div>
+      <p>${esc(c.summary || "No description was reported.")}</p>
+      ${c.detected ? `<code>${esc(c.detected)}</code>` : ""}
+      ${issue && (c.suggested_command || c.help_url) ? `<div class="requirement-actions">
+        ${c.suggested_command ? `<button class="text-action" data-copy="${esc(c.suggested_command)}">Copy suggested command</button>` : ""}
+        ${c.help_url ? `<a class="text-action" href="${esc(c.help_url)}" target="_blank" rel="noreferrer">Open instructions ↗</a>` : ""}
+      </div>` : ""}
+    </div>
+    <span class="st ${PR_TONE(c.status)}">${esc(PR_STATUS_LABEL[c.status] || c.status)}</span>
+  </div>`;
+}
+
+function prereqHostHtml(rep, fallbackName, peerMissing) {
+  if (!rep) {
+    return `<article class="readiness-card unavailable">
+      <div class="readiness-head">
+        <div class="computer-glyph" aria-hidden="true"><i></i></div>
+        <div><span class="setup-kicker">Other computer</span><h3>${esc(fallbackName)}</h3></div>
+        <span class="st off">Not reached</span>
+      </div>
+      <p class="readiness-summary">CiruStrixLink cannot check this computer yet. Start its read-only status agent, then refresh both computers.</p>
+      ${peerMissing ? `<div class="cmdline">ciru-strixlink agent<button class="copy" data-copy="ciru-strixlink agent">copy</button></div>` : ""}
+    </article>`;
+  }
+  const s = prereqStats(rep);
+  const hostname = (rep.system && rep.system.hostname) || fallbackName;
+  const optional = s.all.length - s.required.length;
+  const issueList = s.issues.map(requirementHtml).join("");
+  const groups = PREREQ_GROUPS.map((g) => {
+    const items = g.ids.map((id) => s.all.find((c) => c.id === id)).filter(Boolean);
+    if (!items.length) return "";
+    return `<div class="requirement-group"><h4>${esc(g.label)}</h4>${items.map(requirementHtml).join("")}</div>`;
+  }).join("");
+  return `<article class="readiness-card ${s.ready ? "ready" : "attention"}">
+    <div class="readiness-head">
+      <div class="computer-glyph" aria-hidden="true"><i class="${s.ready ? "on" : ""}"></i></div>
+      <div><span class="setup-kicker">Computer</span><h3>${esc(hostname)}</h3></div>
+      <span class="st ${s.ready ? "ok" : rep.overall_status === "unsupported" ? "bad" : "warn"}">${s.ready ? "Ready" : s.issues.length + " to fix"}</span>
+    </div>
+    <p class="readiness-summary">${s.ready
+      ? `${s.required.length} required checks passed${optional ? ` · ${optional} optional capabilities found` : ""}.`
+      : `${s.issues.length} required ${s.issues.length === 1 ? "item needs" : "items need"} attention before setup can continue.`}</p>
+    ${issueList ? `<div class="requirement-issues">${issueList}</div>` : ""}
+    <details class="setup-disclosure check-list">
+      <summary><span>View all ${s.all.length} checks</span><small>hardware, drivers, and tools</small><i aria-hidden="true"></i></summary>
+      <div class="disclosure-body">${groups}</div>
+    </details>
+  </article>`;
 }
 
 function prereqCompareHtml() {
-  const la = S.local && S.local.prerequisites;
-  const lb = S.peer && !S.peer.state && S.peer.prerequisites;
-  const ids = [...new Set([...(la ? la.components : []), ...(lb ? lb.components : [])].map((c) => c.id))];
-  const nameA = (la && la.system && la.system.hostname) || "host A (console)";
-  const nameB = (lb && lb.system && lb.system.hostname) || "host B (agent)";
-  const overall = (rep) => rep ? `<span class="st ${rep.overall_status === "ready" ? "ok" : rep.overall_status === "unsupported" ? "bad" : "warn"}">${esc((rep.overall_status || "").replace(/_/g, " "))}</span>` : `<span class="st off">no agent</span>`;
-  const groups = PREREQ_GROUPS.map((g) => {
-    const rows = g.ids.filter((id) => ids.includes(id));
-    if (!rows.length) return "";
-    return `<tr class="grp"><td colspan="3">${esc(g.label)}</td></tr>` + rows.map((id) => {
-      const c0 = (la && la.components.find((x) => x.id === id)) || (lb && lb.components.find((x) => x.id === id));
-      return `<tr><td class="cmp"><b>${esc(c0 ? c0.label : id)}</b><span class="mono dim" style="display:block;font-size:10px">${esc(id)}${c0 && c0.required ? " · required" : " · optional"}</span></td>
-        ${prereqCell(la, id)}${prereqCell(lb, id)}</tr>`;
-    }).join("");
-  }).join("");
-  return `<table class="env-table prereq-table" style="width:100%">
-    <thead><tr>
-      <td class="micro">component</td>
-      <td class="micro">${esc(nameA)} ${overall(la)}</td>
-      <td class="micro">${esc(nameB)} ${overall(lb)}</td>
-    </tr></thead><tbody>${groups}</tbody></table>
-    ${!lb ? `<div class="banner info mt16"><div><h3>Peer prerequisites not collected</h3><p>Start the agent on the other host and refresh to compare both sides.</p>
-      <div class="cmdline mt8">on host B: ciru-strixlink agent<button class="copy" data-copy="ciru-strixlink agent">copy</button></div></div></div>` : ""}`;
+  const a = S.local && S.local.prerequisites;
+  const b = S.peer && !S.peer.state && S.peer.prerequisites;
+  const fallbackA = (S.local && S.local.host && S.local.host.hostname) || hostName("a");
+  const fallbackB = (S.peer && S.peer.host && S.peer.host.hostname) || hostName("b");
+  return `<div class="readiness-grid">
+    ${prereqHostHtml(a, fallbackA, false)}
+    ${prereqHostHtml(b, fallbackB, true)}
+  </div>`;
+}
+
+function installActionHtml(a) {
+  const command = a.command ? a.command + " " + (a.args || []).join(" ") : "";
+  return `<div class="install-action">
+    <div><span class="setup-kicker">${esc(a.type)}</span><strong>${esc(a.summary)}</strong>
+      ${(a.components || []).length ? `<small>${a.components.map(esc).join(" · ")}</small>` : ""}</div>
+    <span class="st ${a.can_apply ? "ok" : "warn"}">${a.can_apply ? "Can install" : "Manual"}</span>
+    ${command ? `<div class="cmdline">${esc(command)}<button class="copy" data-copy="${esc(command)}">copy</button></div>` : ""}
+    ${a.target ? `<div class="cmdline">${esc(a.source)} → ${esc(a.target)}</div>` : ""}
+    ${a.help_url ? `<a class="text-action" href="${esc(a.help_url)}" target="_blank" rel="noreferrer">Open manual instructions ↗</a>` : ""}
+  </div>`;
 }
 
 function installPlanHtml() {
   const o = S.setup.installOpts;
   const p = S.setup.installPlan;
   const flags = `${o.optional ? " --include-optional" : ""}${o.self ? " --self" : ""}`;
-  return `<div class="sec"><div class="sec-h"><h2>Installation</h2></div>
-    <div class="row">
-      <label class="row" style="gap:6px;font-size:12px;color:var(--ink-1)"><input type="checkbox" data-set="installOpts.optional" ${o.optional ? "checked" : ""}> include optional user-space tools</label>
-      <label class="row" style="gap:6px;font-size:12px;color:var(--ink-1)"><input type="checkbox" data-set="installOpts.self" ${o.self ? "checked" : ""}> install CiruStrixLink itself</label>
-      <button class="btn" data-act="install-plan">Review installation plan</button>
-    </div>
-    ${p ? `<div class="plan">
-      <div class="plan-h"><span class="t">Installation plan</span>
-        <span class="st ${p.can_apply ? "ok" : "warn"}">${p.can_apply ? "safe to apply" : "manual steps included"}</span>
-        <span class="micro dim">package manager: ${esc(p.package_manager || "unrecognized")}</span></div>
-      <div class="plan-body">
-        ${(p.already_ready || []).length ? `<p class="dim" style="margin:6px 0">Already ready: <span class="mono" style="font-size:11px">${p.already_ready.map(esc).join(", ")}</span></p>` : ""}
-        ${(p.actions || []).map((a) => `<div class="plan-act">
-          <span class="ty">${esc(a.type)}</span>
-          <span class="su">${esc(a.summary)} <span class="dim mono" style="font-size:10.5px">${(a.components || []).map(esc).join(", ")}</span></span>
-          <span class="st ${a.can_apply ? "ok" : "warn"}">${a.can_apply ? "auto" : "manual"}</span>
-          ${a.command ? `<span class="cm"><span class="cmdline">${esc(a.command + " " + (a.args || []).join(" "))}<button class="copy" data-copy="${esc(a.command + " " + (a.args || []).join(" "))}">copy</button></span></span>` : ""}
-          ${a.target ? `<span class="cm"><span class="cmdline">${esc(a.source)} → ${esc(a.target)}</span></span>` : ""}
-          ${a.help_url ? `<span class="cm"><a href="${esc(a.help_url)}" target="_blank" rel="noreferrer" style="color:var(--ink-1);font-size:11px">manual instructions ↗</a></span>` : ""}
-        </div>`).join("")}
+  return `<details class="setup-disclosure install-tools" ${p || S.setup.installTouched ? "open" : ""}>
+    <summary><span>Install missing software</span><small>Review a safe plan; this page never installs anything itself</small><i aria-hidden="true"></i></summary>
+    <div class="disclosure-body">
+      <div class="choice-list">
+        <label class="choice-row"><input type="checkbox" data-set="setup.installOpts.optional" ${o.optional ? "checked" : ""}><span><strong>Include optional diagnostic tools</strong><small>Adds utilities that improve troubleshooting but are not required for the connection.</small></span></label>
+        <label class="choice-row"><input type="checkbox" data-set="setup.installOpts.self" ${o.self ? "checked" : ""}><span><strong>Install CiruStrixLink on this computer</strong><small>Includes the command-line tool itself in the reviewed plan.</small></span></label>
+      </div>
+      <button class="btn" data-act="install-plan">Review what can be installed</button>
+      ${p && p.error ? `<div class="banner bad mt16"><div><h3>Installation plan unavailable</h3><p>${esc(p.error)}</p></div></div>` : ""}
+      ${p && !p.error ? `<div class="review-result">
+        <div class="review-head"><div><span class="setup-kicker">Reviewed plan</span><h4>${(p.actions || []).length ? `${p.actions.length} ${p.actions.length === 1 ? "action" : "actions"}` : "Nothing to install"}</h4></div>
+          <span class="st ${p.can_apply ? "ok" : "warn"}">${p.can_apply ? "Ready to run" : "Manual steps"}</span></div>
+        ${(p.actions || []).map(installActionHtml).join("")}
         ${(p.warnings || []).map((w) => `<div class="warnline">${esc(w)}</div>`).join("")}
-        ${p.can_apply ? `<div class="cmdline mt8">sudo ciru-strixlink install${flags} --apply<button class="copy" data-copy="sudo ciru-strixlink install${flags} --apply">copy</button></div>
-        <p class="hint dim" style="font-size:11px;margin:6px 0 0">Nothing is installed from the browser. Review the plan, then run the command on the host itself.</p>` : `<p class="dim" style="font-size:12px;margin:8px 0 0">No allowlisted automatic actions for this selection — follow the linked manual instructions.</p>`}
-      </div></div>` : ""}
+        ${p.can_apply ? `<div class="copy-command"><div><strong>Run this on the computer</strong><small>The browser will not request or store your administrator password.</small></div>
+          <div class="cmdline">sudo ciru-strixlink install${flags} --apply<button class="copy" data-copy="sudo ciru-strixlink install${flags} --apply">copy</button></div></div>`
+          : `<p class="review-note">Follow the linked instructions for items that cannot be changed safely by CiruStrixLink.</p>`}
+      </div>` : ""}
+    </div>
+  </details>`;
+}
+
+function ipv4Parts(value) {
+  const parts = String(value || "").split("/");
+  const octets = parts[0].split(".").map(Number);
+  if (parts[1] !== "30" || octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+  const base = octets.slice();
+  base[3] = base[3] & 252;
+  return [`${base[0]}.${base[1]}.${base[2]}.${base[3] + 1}`, `${base[0]}.${base[1]}.${base[2]}.${base[3] + 2}`];
+}
+
+function subnetForAddress(value) {
+  const octets = String(value || "").split(".").map(Number);
+  if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return "";
+  return `${octets[0]}.${octets[1]}.${octets[2]}.${octets[3] & 252}/30`;
+}
+
+function hydrateSetupDefaults() {
+  if (S.setup.formTouched) return;
+  const a = reportA();
+  if (!a) return;
+  const pair = ipv4Parts(subnetForAddress(a.local_address));
+  if (pair) {
+    S.setup.form.subnet = subnetForAddress(a.local_address);
+    S.setup.form.role = a.local_address === pair[1] ? "b" : "a";
+  }
+}
+
+function setupPairMapHtml(addressA, addressB, tone, label) {
+  return `<div class="setup-pair-map ${tone}">
+    <div class="setup-endpoint"><div class="computer-glyph" aria-hidden="true"><i class="on"></i></div><div><strong>${esc(hostName("a"))}</strong><code>${esc(addressA || "Address not assigned")}</code></div></div>
+    <div class="setup-cable"><span>${esc(label)}</span><div><i></i><b>USB4</b><i></i></div></div>
+    <div class="setup-endpoint right-side"><div><strong>${esc(hostName("b"))}</strong><code>${esc(addressB || "Address not assigned")}</code></div><div class="computer-glyph" aria-hidden="true"><i class="on"></i></div></div>
+  </div>`;
+}
+
+function setupPlanResultHtml(p, f) {
+  if (!p) return "";
+  if (p.error) return `<div class="banner bad mt16"><div><h3>Connection plan unavailable</h3><p>${esc(p.error)}</p></div></div>`;
+  const localCommand = `sudo ciru-strixlink setup --role ${f.role} --subnet ${f.subnet} --mtu ${f.mtu} --backend ${f.backend}${f.take_over ? " --take-over" : ""} --apply`;
+  const peerCommand = `sudo ciru-strixlink setup --role ${f.role === "a" ? "b" : "a"} --subnet ${f.subnet} --mtu ${f.mtu} --backend ${f.backend} --apply`;
+  return `<div class="review-result connection-review">
+    <div class="review-head"><div><span class="setup-kicker">Reviewed plan</span><h4>Configure both computers as one pair</h4></div><span class="st live">No changes made</span></div>
+    <dl class="plan-facts"><div><dt>Interface</dt><dd>${esc(p.interface)}</dd></div><div><dt>Configuration</dt><dd>${esc(p.backend)}</dd></div><div><dt>Packet size</dt><dd>${p.mtu}</dd></div></dl>
+    ${(p.warnings || []).map((w) => `<div class="warnline">${esc(w)}</div>`).join("")}
+    <details class="technical-detail"><summary>Show exact system commands</summary><div>
+      ${(p.commands || []).map((c) => `<div class="cmdline">${esc(c.name + " " + (c.args || []).join(" "))}<button class="copy" data-copy="${esc(c.name + " " + (c.args || []).join(" "))}">copy</button></div>`).join("")}
+    </div></details>
+    <div class="pair-commands">
+      <div><span class="setup-kicker">On ${esc(hostName("a"))}</span><div class="cmdline">${esc(localCommand)}<button class="copy" data-copy="${esc(localCommand)}">copy</button></div></div>
+      <div><span class="setup-kicker">On ${esc(hostName("b"))}</span><div class="cmdline">${esc(peerCommand)}<button class="copy" data-copy="${esc(peerCommand)}">copy</button></div></div>
+    </div>
+    <p class="review-note">Run the two reviewed commands on their named computers, then refresh. CiruStrixLink will verify the pair before reporting success.</p>
+  </div>`;
+}
+
+function connectionFormHtml() {
+  const f = S.setup.form;
+  const p = S.setup.setupPlan;
+  const addresses = ipv4Parts(f.subnet) || ["First usable address", "Second usable address"];
+  const addressA = f.role === "a" ? addresses[0] : addresses[1];
+  const addressB = f.role === "a" ? addresses[1] : addresses[0];
+  const detectedInterface = (reportA() && reportA().interface) || "auto";
+  return `<div class="connection-form">
+    <div class="field-intro"><span class="setup-kicker">Address assignment</span><h4>Give each computer its own end of the cable</h4><p>The addresses are private to this USB4 cable. They are not exposed to your home network or the internet.</p></div>
+    ${setupPairMapHtml(addressA, addressB, "proposed", "Proposed")}
+    <div class="swap-row"><button class="btn btn-ghost" data-set="setup.form.role" data-val="${f.role === "a" ? "b" : "a"}">⇄ Swap addresses</button></div>
+    <div class="friendly-form">
+      <div class="fld"><label for="setup-subnet">Private address range</label><input id="setup-subnet" class="inp" data-inp="setup.form.subnet" value="${esc(f.subnet)}"><span class="hint">Two usable addresses, one for each computer</span></div>
+      <div class="fld"><label for="setup-backend">Keep the connection</label>
+        <select id="setup-backend" class="sel" data-inp="setup.form.backend">
+          <option value="auto" ${f.backend === "auto" ? "selected" : ""}>Automatically choose (recommended)</option>
+          <option value="networkmanager" ${f.backend === "networkmanager" ? "selected" : ""}>After a restart</option>
+          <option value="iproute2" ${f.backend === "iproute2" ? "selected" : ""}>Until the next restart</option>
+        </select><span class="hint">Automatic uses persistent settings when supported</span></div>
+      <fieldset class="fld"><legend>Packet size</legend><div class="seg" role="group" aria-label="Packet size">
+          <button data-set="setup.form.mtu" data-val="1500" aria-pressed="${f.mtu === 1500}">Standard · 1500</button>
+          <button data-set="setup.form.mtu" data-val="9000" aria-pressed="${f.mtu === 9000}">Jumbo · 9000</button>
+        </div><span class="hint">Use Jumbo only after both computers pass at Standard</span></fieldset>
+    </div>
+    <details class="technical-detail advanced-settings"><summary>Advanced network settings</summary><div class="friendly-form">
+      <div class="fld"><label>USB4 interface</label><input class="inp" value="${esc(detectedInterface)}" disabled><span class="hint">Detected automatically</span></div>
+      <div class="fld"><label for="setup-profile">Saved connection name</label><input id="setup-profile" class="inp" data-inp="setup.form.profile" value="${esc(f.profile)}"></div>
+      <label class="choice-row takeover"><input type="checkbox" data-set="setup.form.take_over" ${f.take_over ? "checked" : ""}><span><strong>Replace an existing saved connection</strong><small>Use only after reviewing which exact NetworkManager profile will be replaced.</small></span></label>
+    </div></details>
+    <div class="review-cta"><div><strong>Nothing changes when you review</strong><p>You will see the exact plan and a separate command for each computer.</p></div><button class="btn btn-primary" data-act="setup-plan">Review connection plan</button></div>
+    ${setupPlanResultHtml(p, f)}
   </div>`;
 }
 
 function setupPlanHtml() {
-  const f = S.setup.form;
-  const p = S.setup.setupPlan;
-  return `<div class="sec"><div class="sec-h"><h2>Portable network setup</h2></div>
-    <p class="dim" style="margin:0 0 12px;font-size:12px">Point-to-point /30 on the USB4 interface. MTU 1500 is the safe default; 9000 only after both sides pass at 1500. NetworkManager persists across reboot; iproute2 ends at reboot.</p>
-    <div class="form">
-      <div class="fld"><label>This host is</label>
-        <div class="seg" role="group" aria-label="Host role">
-          <button data-set="form.role" data-val="a" aria-pressed="${f.role === "a"}">A · .1</button>
-          <button data-set="form.role" data-val="b" aria-pressed="${f.role === "b"}">B · .2</button>
-        </div><span class="hint">the peer takes the opposite role</span></div>
-      <div class="fld"><label>interface</label><input class="inp" value="auto" disabled><span class="hint">auto-detected thunderbolt interface</span></div>
-      <div class="fld"><label>subnet</label><input class="inp" data-inp="form.subnet" value="${esc(f.subnet)}"></div>
-      <div class="fld"><label>MTU</label>
-        <div class="seg" role="group" aria-label="MTU">
-          <button data-set="form.mtu" data-val="1500" aria-pressed="${f.mtu === 1500}">1500</button>
-          <button data-set="form.mtu" data-val="9000" aria-pressed="${f.mtu === 9000}">9000</button>
-        </div></div>
-      <div class="fld"><label>backend</label>
-        <select class="sel" data-inp="form.backend">
-          <option value="auto" ${f.backend === "auto" ? "selected" : ""}>Automatic</option>
-          <option value="networkmanager" ${f.backend === "networkmanager" ? "selected" : ""}>NetworkManager (persistent)</option>
-          <option value="iproute2" ${f.backend === "iproute2" ? "selected" : ""}>iproute2 (temporary)</option>
-        </select></div>
-      <div class="fld"><label>profile name</label><input class="inp" data-inp="form.profile" value="${esc(f.profile)}"></div>
-      <div class="fld"><label>&nbsp;</label>
-        <label class="row" style="gap:6px;font-size:11.5px;color:var(--ink-1);min-height:36px"><input type="checkbox" data-set="form.take_over" ${f.take_over ? "checked" : ""}> take over existing profile</label></div>
-    </div>
-    <div class="row mt16">
-      <button class="btn btn-primary" data-act="setup-plan">Preview plan</button>
-    </div>
-    ${p ? `<div class="plan"><div class="plan-h"><span class="t">Setup plan — this host</span>
-        <span class="st live">${esc(p.backend)}</span>
-        <span class="micro dim">${esc(p.interface)} · ${esc(p.address)} ↔ peer ${esc(p.peer)} · mtu ${p.mtu}</span></div>
-      <div class="plan-body">
-        ${(p.commands || []).map((c) => `<div class="cmdline" style="margin-top:6px">${esc(c.name + " " + (c.args || []).join(" "))}<button class="copy" data-copy="${esc(c.name + " " + (c.args || []).join(" "))}">copy</button></div>`).join("")}
-        ${(p.warnings || []).map((w) => `<div class="warnline">${esc(w)}</div>`).join("")}
-        <div class="cmdline mt8">sudo ciru-strixlink setup --role ${f.role} --subnet ${esc(f.subnet)} --mtu ${f.mtu} --backend ${esc(f.backend)}${f.take_over ? " --take-over" : ""} --apply<button class="copy" data-copy="sudo ciru-strixlink setup --role ${f.role} --subnet ${esc(f.subnet)} --mtu ${f.mtu} --backend ${esc(f.backend)}${f.take_over ? " --take-over" : ""} --apply">copy</button></div>
-        <div class="cmdline mt8">on the peer: sudo ciru-strixlink setup --role ${f.role === "a" ? "b" : "a"} --subnet ${esc(f.subnet)} --mtu ${f.mtu} --backend ${esc(f.backend)} --apply<button class="copy" data-copy="sudo ciru-strixlink setup --role ${f.role === "a" ? "b" : "a"} --subnet ${esc(f.subnet)} --mtu ${f.mtu} --backend ${esc(f.backend)} --apply">copy</button></div>
-      </div></div>` : ""}
-  </div>`;
+  const p = pairReport();
+  const connected = Boolean(p && p.pair_identity_valid && p.portable_ready);
+  const fast = !p ? { tone: "off", label: "Unknown", copy: "An optional accelerator layered on top after the standard connection is healthy." }
+    : p.nhi_in_use ? { tone: "live", label: "In use", copy: "The optional accelerator is configured and currently held by a workload." }
+    : p.nhi_ready ? { tone: "ok", label: "Ready", copy: "The optional accelerator is configured and available for a supported runtime." }
+    : p.nhi_status === "blocked" || p.nhi_status === "partial" || p.cleanup_required
+      ? { tone: "warn", label: "Needs attention", copy: "The optional accelerator settings do not match. Review Diagnostics before changing them." }
+      : p.arm_allowed ? { tone: "warn", label: "Can be prepared", copy: "Both computers support the optional accelerator, but it has not been prepared yet." }
+      : { tone: "off", label: "Optional", copy: "An optional accelerator layered on top after the standard connection is healthy." };
+  const a = reportA(), b = reportB();
+  const currentMap = a && b ? setupPairMapHtml(a.local_address, b.local_address, connected ? "connected" : "attention", connected ? "Connected" : "Needs attention") : "";
+  const editor = connectionFormHtml();
+  return `<section class="setup-section" id="setup-network">
+    <div class="setup-section-head"><div><span class="step-number">2</span><span class="setup-kicker">Cable connection</span><h2>${connected ? "The USB4 network is connected" : "Configure the USB4 cable network"}</h2>
+      <p>${connected ? "Both computers have reciprocal private addresses and can reach each other over the cable." : "Assign one private address to each end so the computers can communicate without using your LAN."}</p></div>
+      <span class="st ${connected ? "ok" : "warn"}">${connected ? "Connected" : "Setup needed"}</span></div>
+    ${currentMap}
+    <div class="lane-explainer"><div><i class="portable"></i><div><strong>Standard USB4</strong><p>The required base connection. It carries control traffic and works with ordinary network-aware runtimes.</p></div><span class="st ${connected ? "ok" : "warn"}">${connected ? "Ready" : "Not ready"}</span></div>
+      <div><i class="accelerated"></i><div><strong>Fast USB4 · NHI</strong><p>${esc(fast.copy)}</p></div><span class="st ${fast.tone}">${esc(fast.label)}</span></div></div>
+    ${connected ? `<details class="setup-disclosure reconfigure" ${S.setup.setupPlan || S.setup.formTouched ? "open" : ""}><summary><span>Change connection settings</span><small>Only needed after changing hardware, addresses, or persistence</small><i aria-hidden="true"></i></summary><div class="disclosure-body">${editor}</div></details>` : editor}
+  </section>`;
 }
 
 function rollbackHtml() {
   const r = S.setup.rb;
   const p = S.setup.rollbackPlan;
-  return `<div class="sec"><div class="sec-h"><h2>Rollback</h2></div>
-    <p class="dim" style="margin:0 0 12px;font-size:12px">Removes only the exact CiruStrixLink-created NetworkManager profile. Unrelated profiles are never touched.</p>
-    <div class="form">
-      <div class="fld"><label>profile to remove</label><input class="inp" data-inp="rb.profile" value="${esc(r.profile)}"></div>
-      <div class="fld"><label>restore preserved profile (optional)</label><input class="inp" data-inp="rb.restore" value="${esc(r.restore)}" placeholder="none"></div>
+  const command = `sudo ciru-strixlink rollback --profile ${r.profile}${r.restore ? ` --restore ${r.restore}` : ""} --apply`;
+  return `<section class="setup-section recovery" id="setup-recovery">
+    <details class="setup-disclosure recovery-disclosure" ${p || S.setup.rollbackTouched ? "open" : ""}>
+      <summary><span>Remove CiruStrixLink network settings</span><small>Recovery only · unrelated network connections are never touched</small><i aria-hidden="true"></i></summary>
+      <div class="disclosure-body">
+        <div class="field-intro"><span class="setup-kicker">Start over safely</span><h4>Remove only the saved connection created by CiruStrixLink</h4><p>Review the exact profile first. This does not reset networking, stop workloads, or delete unrelated profiles.</p></div>
+        <div class="friendly-form two-col">
+          <div class="fld"><label for="rollback-profile">Saved connection to remove</label><input id="rollback-profile" class="inp" data-inp="setup.rb.profile" value="${esc(r.profile)}"></div>
+          <div class="fld"><label for="rollback-restore">Previously saved connection to restore</label><input id="rollback-restore" class="inp" data-inp="setup.rb.restore" value="${esc(r.restore)}" placeholder="Optional"></div>
+        </div>
+        <button class="btn btn-danger" data-act="rollback-plan">Review removal plan</button>
+        ${p && p.error ? `<div class="banner bad mt16"><div><h3>Removal plan unavailable</h3><p>${esc(p.error)}</p></div></div>` : ""}
+        ${p && !p.error ? `<div class="review-result"><div class="review-head"><div><span class="setup-kicker">Reviewed removal</span><h4>${esc(r.profile)}</h4></div><span class="st warn">No changes made</span></div>
+          ${(p.commands || []).map((c) => `<div class="cmdline">${esc(c.name + " " + (c.args || []).join(" "))}<button class="copy" data-copy="${esc(c.name + " " + (c.args || []).join(" "))}">copy</button></div>`).join("")}
+          ${(p.warnings || []).map((w) => `<div class="warnline">${esc(w)}</div>`).join("")}
+          <div class="copy-command"><div><strong>Run only after reviewing the profile name</strong><small>This command changes the local computer.</small></div><div class="cmdline">${esc(command)}<button class="copy" data-copy="${esc(command)}">copy</button></div></div>
+        </div>` : ""}
+      </div>
+    </details>
+  </section>`;
+}
+
+function setupHeroHtml() {
+  const a = S.local && S.local.prerequisites;
+  const b = S.peer && !S.peer.state && S.peer.prerequisites;
+  const aReady = prereqStats(a).ready;
+  const bReady = prereqStats(b).ready;
+  const requirementsReady = aReady && bReady;
+  const p = pairReport();
+  const connected = Boolean(p && p.pair_identity_valid && p.portable_ready);
+  const ready = requirementsReady && connected;
+  const state = ready ? {
+    title: "This connection is already set up",
+    body: "Both computers passed their required checks and can reach each other over the USB4 cable. You do not need to change anything here.",
+    action: "Return to overview", view: "pair", tone: "ok",
+  } : !requirementsReady ? {
+    title: "Start by checking both computers",
+    body: "CiruStrixLink will show only the missing requirements first. Technical details stay available when you need them.",
+    action: "Review computer checks", target: "setup-requirements", tone: "warn",
+  } : {
+    title: "Both computers are ready for cable setup",
+    body: "Assign one private address to each end of the USB4 cable, review the plan, and run the named command on each computer.",
+    action: "Configure the cable", target: "setup-network", tone: "warn",
+  };
+  const stage = (number, label, detail, done, active) => `<div class="setup-stage ${done ? "done" : active ? "active" : ""}"><span>${done ? "✓" : number}</span><div><strong>${esc(label)}</strong><small>${esc(detail)}</small></div></div>`;
+  return `<section class="setup-hero tone-${state.tone}">
+    <div class="setup-hero-copy"><span class="setup-kicker">Connection guide</span><h1>${esc(state.title)}</h1><p>${esc(state.body)}</p>
+      ${state.view ? `<button class="btn btn-primary" data-act="goto" data-view="${state.view}">${esc(state.action)} <span aria-hidden="true">→</span></button>`
+        : `<button class="btn btn-primary" data-act="setup-jump" data-target="${state.target}">${esc(state.action)} <span aria-hidden="true">↓</span></button>`}</div>
+    <div class="setup-path" aria-label="Connection setup progress">
+      ${stage("1", "Computer checks", requirementsReady ? "Both computers ready" : "Review missing requirements", requirementsReady, !requirementsReady)}
+      <i aria-hidden="true"></i>
+      ${stage("2", "Cable network", connected ? "Private link connected" : "Assign both cable addresses", connected, requirementsReady && !connected)}
+      <i aria-hidden="true"></i>
+      ${stage("3", "Ready", ready ? "No changes needed" : "Verified after refresh", ready, false)}
     </div>
-    <div class="row mt16"><button class="btn" data-act="rollback-plan">Preview rollback</button></div>
-    ${p ? `<div class="plan"><div class="plan-h"><span class="t">Rollback plan</span><span class="micro dim">${esc(p.interface || "")}</span></div>
-      <div class="plan-body">
-        ${(p.commands || []).map((c) => `<div class="cmdline" style="margin-top:6px">${esc(c.name + " " + (c.args || []).join(" "))}<button class="copy" data-copy="${esc(c.name + " " + (c.args || []).join(" "))}">copy</button></div>`).join("")}
-        ${(p.warnings || []).map((w) => `<div class="warnline">${esc(w)}</div>`).join("")}
-        <div class="cmdline mt8">sudo ciru-strixlink rollback --profile ${esc(r.profile)}${r.restore ? ` --restore ${esc(r.restore)}` : ""} --apply<button class="copy" data-copy="sudo ciru-strixlink rollback --profile ${esc(r.profile)}${r.restore ? ` --restore ${esc(r.restore)}` : ""} --apply">copy</button></div>
-      </div></div>` : ""}
-  </div>`;
+  </section>`;
 }
 
 function vSetup() {
   const sup = S.local && S.local.host && S.local.host.supported === false;
-  return `<div class="view-head"><h1>Connection setup</h1><span class="sub">requirements and network settings · changes are previewed, not applied</span></div>
+  const a = prereqStats(S.local && S.local.prerequisites);
+  const b = prereqStats(S.peer && !S.peer.state && S.peer.prerequisites);
+  const requirementsReady = a.ready && b.ready;
+  return `<div class="setup-page">
+    ${setupHeroHtml()}
     ${sup ? `<div class="banner warn"><svg class="bic" viewBox="0 0 16 16"><path d="M8 2 1.8 13.5h12.4L8 2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M8 6.5v3.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="11.6" r=".8" fill="currentColor"/></svg><div><h3>This console host is not a supported Strix Halo Linux system</h3><p>Prerequisite and plan previews still render. Apply the reviewed commands on the target hosts.</p></div></div>` : ""}
-    <div class="sec"><div class="sec-h"><h2>Prerequisite inventory</h2></div>
+    <section class="setup-section" id="setup-requirements">
+      <div class="setup-section-head"><div><span class="step-number">1</span><span class="setup-kicker">Computer checks</span><h2>${requirementsReady ? "Both computers are ready" : "Make sure both computers are ready"}</h2>
+        <p>${requirementsReady ? "Every required hardware, driver, and networking check passed. Open a computer only when you need the technical inventory." : "Fix the items called out below. Checks that already passed are tucked away."}</p></div>
+        <span class="st ${requirementsReady ? "ok" : "warn"}">${requirementsReady ? "Complete" : "Needs attention"}</span></div>
       ${prereqCompareHtml()}
-    </div>
-    ${installPlanHtml()}
+      ${installPlanHtml()}
+    </section>
     ${setupPlanHtml()}
-    ${rollbackHtml()}`;
+    ${rollbackHtml()}
+  </div>`;
 }
 
 /* ---------------- Test view ---------------- */
@@ -1106,6 +1275,19 @@ function setPath(obj, path, val) {
   o[last] = typeof o[last] === "number" ? Number(val) : val;
 }
 
+function invalidateSetupPreview(path) {
+  if (path.startsWith("setup.form.")) {
+    S.setup.formTouched = true;
+    S.setup.setupPlan = null;
+  } else if (path.startsWith("setup.installOpts.")) {
+    S.setup.installTouched = true;
+    S.setup.installPlan = null;
+  } else if (path.startsWith("setup.rb.")) {
+    S.setup.rollbackTouched = true;
+    S.setup.rollbackPlan = null;
+  }
+}
+
 async function doBench() {
   const t = S.test;
   t.benchBusy = true; t.benchErr = null; t.benchStarted = Date.now();
@@ -1135,6 +1317,7 @@ document.addEventListener("click", async (ev) => {
   const seg = ev.target.closest("[data-set]");
   if (seg && seg.tagName === "BUTTON") {
     setPath(S, seg.dataset.set, seg.dataset.val);
+    invalidateSetupPreview(seg.dataset.set);
     renderView();
     return;
   }
@@ -1143,6 +1326,10 @@ document.addEventListener("click", async (ev) => {
   const act = el.dataset.act;
   try {
     if (act === "refresh") { await refreshAll(false); }
+    else if (act === "setup-jump") {
+      const target = document.getElementById(el.dataset.target);
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
     else if (act === "history-metric") { S.historyMetric = el.dataset.historyMetric === "pp" ? "pp" : "tg"; renderModelPanel(); }
     else if (act === "goto") { S.view = el.dataset.view; history.replaceState(null, "", "#/" + S.view); renderView(); }
     else if (act === "activity") { await openDrawer(); }
@@ -1199,9 +1386,18 @@ document.addEventListener("click", async (ev) => {
 
 document.addEventListener("change", (ev) => {
   const cb = ev.target.closest("[data-set]");
-  if (cb && cb.type === "checkbox") { setPath(S, cb.dataset.set, cb.checked); return; }
+  if (cb && cb.type === "checkbox") {
+    setPath(S, cb.dataset.set, cb.checked);
+    invalidateSetupPreview(cb.dataset.set);
+    renderView();
+    return;
+  }
   const inp = ev.target.closest("[data-inp]");
-  if (inp) setPath(S, inp.dataset.inp, inp.value);
+  if (inp) {
+    setPath(S, inp.dataset.inp, inp.value);
+    invalidateSetupPreview(inp.dataset.inp);
+    renderView();
+  }
 });
 
 document.addEventListener("keydown", (ev) => {
