@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.2 — competing NPU detection and corrected isolation
+
+### Fixed
+
+- Detects `flm-npu.service` alongside `qwen-main.service` as a competing model
+  workload. Launch identifies the exact service even when GLM is already
+  loaded, and refuses a new paired load while either service is active.
+- Corrects the v0.3.1 benchmark record: FastFlowLM remained resident on Ciru
+  during the first DFlash campaign, peaking at 11.5 GiB. Those speed rows are
+  retained as mixed-workload evidence, not exclusive-system measurements.
+
+### Validated
+
+- Two identical 65,680-token k=5 requests after stopping the NPU measured
+  12.93 and 14.56 output tokens/s, pooling to 13.70 tokens/s. Both clear the
+  10 tokens/s operating requirement without unloading the GLM pair.
+- Stopping the NPU increased available memory on Ciru from about 4.3 GiB to
+  12.8 GiB. The GLM pair remained loaded at 262,272 tokens throughout.
+
 ## 0.3.1 — truthful runtime state and 256K DFlash tuning
 
 ### Fixed
@@ -14,11 +33,12 @@
 
 ### Validated
 
-- Selected DFlash2 k=5 for the 256K single-request profile. The exact
-  65,680-token recovery prompt sustained 15.12 generated tokens/s, versus 9.38
-  target-only and 12.16 at k=3.
-- DFlash2 k=5 passed HumanEval 0–9 at 10/10 pass@1 and 26.10 weighted generated
-  tokens/s, slightly above the prior k=7 production gate.
+- Selected DFlash2 k=5 provisionally for the 256K single-request profile. The
+  initial mixed-workload campaign measured 15.12 generated tokens/s, versus
+  9.38 target-only and 12.16 at k=3.
+- DFlash2 k=5 passed HumanEval 0–9 at 10/10 pass@1. Its 26.10 weighted speed
+  was measured while the Ciru NPU service remained resident; v0.3.2 records
+  clean follow-up measurements and the missing isolation control.
 - Disabled the unbounded external prefix-cache disk tier in the production
   recipe pending a quota and eviction implementation.
 

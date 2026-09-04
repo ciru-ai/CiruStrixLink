@@ -17,7 +17,7 @@ only to identify compatible hardware and software.
 
 ## 1. Install the bundled CiruStrixLink release on both hosts
 
-The model repository includes the qualified CiruStrixLink 0.3.1 archive. Use an
+The model repository includes the qualified CiruStrixLink 0.3.2 archive. Use an
 isolated Python environment for the Hugging Face CLI, then extract the bundled
 binary:
 
@@ -27,7 +27,7 @@ python3 -m venv "$HF_ENV"
 "$HF_ENV/bin/pip" install -U huggingface_hub
 HF="$HF_ENV/bin/hf"
 
-VERSION=0.3.1
+VERSION=0.3.2
 MODEL_REPO=jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4
 mkdir -p /tmp/ciru-strixlink-release
 "$HF" download "$MODEL_REPO" \

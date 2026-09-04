@@ -346,9 +346,13 @@ func (c *launchController) inspect(ctx context.Context) launchNodeStatus {
 			s.Rank = int(match[1][0] - '0')
 		}
 	}
-	if mainState, err := c.run(ctx, "systemctl", "--user", "show", "qwen-main.service", "--no-pager", "--property=ActiveState"); err == nil && keyValues(mainState)["ActiveState"] == "active" {
-		s.CompetingModel = "qwen-main.service"
+	var competing []string
+	for _, service := range []string{"qwen-main.service", "flm-npu.service"} {
+		if state, err := c.run(ctx, "systemctl", "--user", "show", service, "--no-pager", "--property=ActiveState"); err == nil && keyValues(state)["ActiveState"] == "active" {
+			competing = append(competing, service)
+		}
 	}
+	s.CompetingModel = strings.Join(competing, ", ")
 	c.readRuntimeSettings(&s)
 	contextBody, _ := c.readFile(fmt.Sprintf("/etc/ciru-glm53-iu4/context-%s.env", c.username))
 	contextValues := keyValues(contextBody)
@@ -490,14 +494,14 @@ func combineLaunchStatus(local launchNodeStatus, peer *launchNodeStatus, peerSta
 	}
 	if s.State == "unloaded" && (local.CompetingModel != "" || peer.CompetingModel != "") {
 		s.CanLoad = false
-		var hosts []string
+		var workloads []string
 		if local.CompetingModel != "" {
-			hosts = append(hosts, local.Hostname)
+			workloads = append(workloads, local.Hostname+" ("+local.CompetingModel+")")
 		}
 		if peer.CompetingModel != "" {
-			hosts = append(hosts, peer.Hostname)
+			workloads = append(workloads, peer.Hostname+" ("+peer.CompetingModel+")")
 		}
-		s.Blockers = append(s.Blockers, "Stop the currently selected main model on "+strings.Join(hosts, " and ")+" before loading GLM 5.3.")
+		s.Blockers = append(s.Blockers, "Stop competing model services on "+strings.Join(workloads, " and ")+" before loading GLM 5.3.")
 	}
 	if !control || !local.ControlEnabled || !peer.ControlEnabled {
 		s.CanLoad, s.CanUnload = false, false

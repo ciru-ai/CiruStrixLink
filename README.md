@@ -14,10 +14,22 @@ an IP socket can use the portable transport. The optional NHI transport is also
 model-neutral at the link layer; a runtime needs a small adapter capable of
 importing its DMA-BUF. vLLM is one supported overlay, not the owner of the link.
 
-> **CiruStrixLink 0.3.1** reports the actual DFlash, prefix-cache, and Fast
-> USB4 state for both GLM5.3 ranks. It includes the redesigned setup workflow
-> and opt-in paired Launch page introduced in 0.3.0. See the
+> **CiruStrixLink 0.3.2** detects competing GPU and NPU model services and
+> corrects the 256K benchmark isolation record. It includes the truthful
+> two-rank runtime reporting introduced in 0.3.1. See the
 > [changelog](CHANGELOG.md).
+
+## What's new in 0.3.2
+
+- Launch detects both `qwen-main.service` and FastFlowLM's `flm-npu.service`,
+  names the competing service beside its host, and blocks a new GLM load until
+  the competing model is stopped.
+- Two NPU-off repetitions of the exact 65,680-token k=5 request measured 12.93
+  and 14.56 output tokens/s, pooling to 13.70. Both clear the 10 tokens/s
+  requirement while the GLM remains loaded.
+- Earlier DFlash and HumanEval throughput rows are explicitly labeled as
+  mixed-workload measurements because the NPU was resident on Ciru. The
+  HumanEval 10/10 correctness result remains valid.
 
 ## What's new in 0.3.1
 
@@ -25,9 +37,9 @@ importing its DMA-BUF. vLLM is one supported overlay, not the owner of the link.
   hosts and shows them as known only when the ranks agree.
 - Overview derives its DFlash label from the managed launcher instead of
   requiring a hand-written display-only environment variable.
-- The validated 256K recipe is DFlash2 k=5 with prefix caching disabled. The
-  exact 65,680-token recovery prompt sustained 15.12 output tokens/s, and the
-  HumanEval 0–9 gate passed 10/10 at 26.10 weighted tokens/s.
+- The 256K recipe is DFlash2 k=5 with prefix caching disabled. The initial
+  mixed-workload run reached 15.12 output tokens/s, and HumanEval 0–9 passed
+  10/10 at 26.10 weighted tokens/s while the NPU service remained resident.
 - Fast USB4 transport is reported separately from speculative decoding, and
   the runtime recipe now explicitly shows TP2 with PP1.
 
@@ -134,7 +146,7 @@ Run this on both Strix Halo hosts. Set `VERSION` to the release you want to
 install:
 
 ```bash
-VERSION=0.3.1
+VERSION=0.3.2
 curl -fL \
   -o /tmp/ciru-strixlink.tar.gz \
   "https://github.com/ciru-ai/CiruStrixLink/releases/download/v${VERSION}/ciru-strixlink-${VERSION}-linux-amd64.tar.gz"

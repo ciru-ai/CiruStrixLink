@@ -24,7 +24,7 @@ import (
 	"github.com/ciru-ai/CiruStrixLink/internal/ui"
 )
 
-var version = "0.3.1"
+var version = "0.3.2"
 
 type testReport struct {
 	Version       string       `json:"ciru_strixlink_version"`
