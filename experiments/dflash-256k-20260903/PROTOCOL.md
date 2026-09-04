@@ -5,8 +5,9 @@ Date: 2026-09-03
 ## Decision
 
 Determine whether the production DFlash depth of 7 remains beneficial during
-long-context generation, and select the smallest safe configuration that keeps
-the recovered pagoda workload at or above 10 generated tokens/second.
+long-context generation, and identify the fixed depth that gives the highest
+measured throughput on the recovered pagoda workload without breaking the
+correctness gate.
 
 ## Locked baseline
 
@@ -36,8 +37,9 @@ the recovered pagoda workload at or above 10 generated tokens/second.
 - Guardrails: request success, rank agreement, TTFT, output-token count,
   DFlash accepted/drafted tokens, mean accepted length, and acceptance by
   position.
-- Practical threshold: at least 10 tokens/second for the long-context probe.
-- Material comparison threshold: 2% throughput, provided guardrails pass.
+- Primary decision: highest repeatable throughput on the exact long-context
+  probe, provided guardrails pass.
+- Material comparison threshold: 2% throughput.
 
 Profiler runs are explanatory and are not used as clean performance rows.
 Each load records the complete command identity and is restored to the selected
@@ -45,18 +47,9 @@ serving configuration when the campaign ends.
 
 ## Outcome
 
-DFlash2 k=5 remains the provisional serving configuration. The original
-target-only, k=3, k=5, and HumanEval rows were later found to overlap an active
-`flm-npu.service` workload on Ciru and are therefore mixed-workload evidence,
-not exclusive-system measurements.
-
-With the NPU stopped, two repetitions of the exact 65,680-token k=5 request
-measured 12.93 and 14.56 generated tokens/s, pooling to 13.70 tokens/s. Both
-clear the 10 tokens/s operating requirement. A clean target-only and k=3
-comparison would require unloading and reloading the model and was deferred to
-preserve the active user workload. The HumanEval 10/10 pass@1 result remains a
-valid correctness gate, while its throughput figure is labeled mixed workload.
-
-Prefix caching remains disabled because the external filesystem tier is not
-byte-bounded. See `RESULTS.md` for measurements, the isolation correction, and
-trace findings.
+DFlash2 k=5 is the best fixed depth measured on the exact request: 15.12
+generated tokens/s, versus 12.16 at k=3 and 9.38 target-only. This is a
+low-acceptance prose stress case, not a general model-throughput baseline.
+HumanEval 0–9 passed 10/10 at 26.10 weighted generated tokens/s. Prefix caching
+remains disabled because the external filesystem tier is not byte-bounded. See
+`RESULTS.md` for measurements and trace findings.

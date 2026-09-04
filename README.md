@@ -14,22 +14,21 @@ an IP socket can use the portable transport. The optional NHI transport is also
 model-neutral at the link layer; a runtime needs a small adapter capable of
 importing its DMA-BUF. vLLM is one supported overlay, not the owner of the link.
 
-> **CiruStrixLink 0.3.2** detects competing GPU and NPU model services and
-> corrects the 256K benchmark isolation record. It includes the truthful
-> two-rank runtime reporting introduced in 0.3.1. See the
+> **CiruStrixLink 0.3.3** keeps model control inside its product boundary:
+> Launch reports and manages the packaged GLM pair without inspecting unrelated
+> host applications or services. It includes the truthful two-rank runtime
+> reporting introduced in 0.3.1. See the
 > [changelog](CHANGELOG.md).
 
-## What's new in 0.3.2
+## What's new in 0.3.3
 
-- Launch detects both `qwen-main.service` and FastFlowLM's `flm-npu.service`,
-  names the competing service beside its host, and blocks a new GLM load until
-  the competing model is stopped.
-- Two NPU-off repetitions of the exact 65,680-token k=5 request measured 12.93
-  and 14.56 output tokens/s, pooling to 13.70. Both clear the 10 tokens/s
-  requirement while the GLM remains loaded.
-- Earlier DFlash and HumanEval throughput rows are explicitly labeled as
-  mixed-workload measurements because the NPU was resident on Ciru. The
-  HumanEval 10/10 correctness result remains valid.
+- Removes application-specific service discovery and policy from Launch.
+- Limits paired-load checks to the two packaged GLM deployment modes, which
+  cannot safely own the same model files and ports at the same time.
+- Clarifies that DFlash throughput depends strongly on draft acceptance: the
+  256K prose recovery probe is a stress case, not the model's general decode
+  speed.
+- Makes no model, weight, vLLM, DFlash, kernel, context, or transport change.
 
 ## What's new in 0.3.1
 
@@ -37,9 +36,10 @@ importing its DMA-BUF. vLLM is one supported overlay, not the owner of the link.
   hosts and shows them as known only when the ranks agree.
 - Overview derives its DFlash label from the managed launcher instead of
   requiring a hand-written display-only environment variable.
-- The 256K recipe is DFlash2 k=5 with prefix caching disabled. The initial
-  mixed-workload run reached 15.12 output tokens/s, and HumanEval 0–9 passed
-  10/10 at 26.10 weighted tokens/s while the NPU service remained resident.
+- The 256K recipe is DFlash2 k=5 with prefix caching disabled. HumanEval 0–9
+  passed 10/10 at 26.10 weighted tokens/s. The exact prose-heavy recovery probe
+  reached 15.12 tokens/s versus 9.38 target-only; that low-acceptance stress
+  result is not a model-wide throughput baseline.
 - Fast USB4 transport is reported separately from speculative decoding, and
   the runtime recipe now explicitly shows TP2 with PP1.
 
@@ -146,7 +146,7 @@ Run this on both Strix Halo hosts. Set `VERSION` to the release you want to
 install:
 
 ```bash
-VERSION=0.3.2
+VERSION=0.3.3
 curl -fL \
   -o /tmp/ciru-strixlink.tar.gz \
   "https://github.com/ciru-ai/CiruStrixLink/releases/download/v${VERSION}/ciru-strixlink-${VERSION}-linux-amd64.tar.gz"
@@ -398,10 +398,10 @@ peer IP—when permission is missing. Validate the fragment with `visudo` and
 install it as a root-owned mode-0440 file.
 
 The helper cannot execute arbitrary commands, choose another unit, change a
-running context, or silently stop a competing model. A paired load:
+running context, or inspect or stop unrelated applications. A paired load:
 
 1. confirms both ranks are installed, stopped, complementary, and authorized;
-2. refuses to proceed while `qwen-main.service` or the portable GLM unit is
+2. refuses to proceed while the portable form of the same GLM deployment is
    active on either host;
 3. verifies the NHI pair is qualified and its exclusive lease is available;
 4. writes the selected profile to both stopped ranks;

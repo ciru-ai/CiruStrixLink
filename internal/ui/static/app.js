@@ -1201,13 +1201,12 @@ function launchNode(node, side) {
   const loaded = node.state === "loaded";
   const tone = loaded ? "ok" : node.state === "stopped" ? "off" : "warn";
   const state = loaded ? "Loaded" : node.state === "stopped" ? "Unloaded" : node.state.replace(/_/g, " ");
-  const detail = `${node.profile_name ? `${esc(node.profile_name)} profile` : "Profile unknown"}${node.competing_model ? ` · competing ${esc(node.competing_model)} active` : ""}`;
-  const stateLabel = node.competing_model ? loaded ? "loaded · shared" : "in use" : state;
+  const detail = node.profile_name ? `${esc(node.profile_name)} profile` : "Profile unknown";
   const total = Number(node.ram_total_bytes || 0), used = Number(node.ram_used_bytes || 0), available = Number(node.ram_available_bytes || 0);
   const usedPct = total > 0 ? Math.min(100, Math.max(0, used * 100 / total)) : 0;
   const gib = (bytes) => (bytes / 1073741824).toFixed(1);
   const memory = total > 0 ? `<div class="launch-memory ${available / total < .1 ? "tight" : ""}"><div><span>Unified system RAM</span><b>${gib(used)} <small>/ ${gib(total)} GiB</small></b><em>${gib(available)} GiB available</em><small>Host-wide · KV cache ${gib(Number(node.kv_cache_bytes || 0))} GiB</small></div><i aria-hidden="true"><span style="width:${usedPct.toFixed(1)}%"></span></i></div>` : "";
-  return `<section class="launch-node ${loaded ? "loaded" : ""}"><div class="launch-node-head"><div><span class="launch-rank">Rank ${node.rank >= 0 ? node.rank : "?"}</span><h3>${esc(node.hostname || side)}</h3></div><span class="st ${node.competing_model ? "warn" : tone}">${esc(stateLabel)}</span></div><p>${detail}${node.pid ? ` · PID ${node.pid}` : ""}</p>${memory}</section>`;
+  return `<section class="launch-node ${loaded ? "loaded" : ""}"><div class="launch-node-head"><div><span class="launch-rank">Rank ${node.rank >= 0 ? node.rank : "?"}</span><h3>${esc(node.hostname || side)}</h3></div><span class="st ${tone}">${esc(state)}</span></div><p>${detail}${node.pid ? ` · PID ${node.pid}` : ""}</p>${memory}</section>`;
 }
 
 function launchPermissionHelp(s) {

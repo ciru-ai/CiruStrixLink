@@ -71,7 +71,6 @@ type launchNodeStatus struct {
 	KVBytes        int64  `json:"kv_cache_bytes,omitempty"`
 	PrefixCPUBytes int64  `json:"prefix_cache_cpu_bytes,omitempty"`
 	ControlEnabled bool   `json:"control_enabled"`
-	CompetingModel string `json:"competing_model,omitempty"`
 	RAMTotalBytes  int64  `json:"ram_total_bytes,omitempty"`
 	RAMUsedBytes   int64  `json:"ram_used_bytes,omitempty"`
 	RAMAvailBytes  int64  `json:"ram_available_bytes,omitempty"`
@@ -346,13 +345,6 @@ func (c *launchController) inspect(ctx context.Context) launchNodeStatus {
 			s.Rank = int(match[1][0] - '0')
 		}
 	}
-	var competing []string
-	for _, service := range []string{"qwen-main.service", "flm-npu.service"} {
-		if state, err := c.run(ctx, "systemctl", "--user", "show", service, "--no-pager", "--property=ActiveState"); err == nil && keyValues(state)["ActiveState"] == "active" {
-			competing = append(competing, service)
-		}
-	}
-	s.CompetingModel = strings.Join(competing, ", ")
 	c.readRuntimeSettings(&s)
 	contextBody, _ := c.readFile(fmt.Sprintf("/etc/ciru-glm53-iu4/context-%s.env", c.username))
 	contextValues := keyValues(contextBody)
@@ -491,17 +483,6 @@ func combineLaunchStatus(local launchNodeStatus, peer *launchNodeStatus, peerSta
 	default:
 		s.State, s.Summary = "unloaded", "GLM 5.3 is ready to load on both machines."
 		s.CanLoad = true
-	}
-	if s.State == "unloaded" && (local.CompetingModel != "" || peer.CompetingModel != "") {
-		s.CanLoad = false
-		var workloads []string
-		if local.CompetingModel != "" {
-			workloads = append(workloads, local.Hostname+" ("+local.CompetingModel+")")
-		}
-		if peer.CompetingModel != "" {
-			workloads = append(workloads, peer.Hostname+" ("+peer.CompetingModel+")")
-		}
-		s.Blockers = append(s.Blockers, "Stop competing model services on "+strings.Join(workloads, " and ")+" before loading GLM 5.3.")
 	}
 	if !control || !local.ControlEnabled || !peer.ControlEnabled {
 		s.CanLoad, s.CanUnload = false, false
@@ -793,8 +774,8 @@ var launchNodeRank = regexp.MustCompile(`(?:^|\x00)--node-rank(?:=|\x00)([01])(?
 
 // RunModelNode is the narrow privileged helper used by the token-protected
 // model-control channel. It can only configure or start/stop the fixed GLM 5.3
-// NHI unit for the named service user; it never enables, disables, or replaces
-// qwen-main.service.
+// NHI unit for the named service user. It does not inspect or manage unrelated
+// applications or services on the host.
 func RunModelNode(action, username string, profileID int, peer string) error {
 	if os.Geteuid() != 0 {
 		return errors.New("model-node must run as root through an explicit sudoers rule")
@@ -849,13 +830,6 @@ func RunModelNode(action, username string, profileID int, peer string) error {
 		}
 		return os.Rename(tmpName, filepath.Join(dir, "context-"+username+".env"))
 	case "load":
-		mainActive, err := userUnitActive(serviceUser, "qwen-main.service")
-		if err != nil {
-			return fmt.Errorf("check qwen-main.service: %w", err)
-		}
-		if mainActive {
-			return errors.New("qwen-main.service is active; select or stop the current main model before loading GLM 5.3")
-		}
 		portableActive, err := userUnitActive(serviceUser, launchModelName+".service")
 		if err != nil {
 			return fmt.Errorf("check portable GLM service: %w", err)

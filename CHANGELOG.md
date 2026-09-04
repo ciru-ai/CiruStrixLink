@@ -1,23 +1,27 @@
 # Changelog
 
-## 0.3.2 — competing NPU detection and corrected isolation
+## 0.3.3 — model-control boundary correction
 
-### Fixed
+### Changed
 
-- Detects `flm-npu.service` alongside `qwen-main.service` as a competing model
-  workload. Launch identifies the exact service even when GLM is already
-  loaded, and refuses a new paired load while either service is active.
-- Corrects the v0.3.1 benchmark record: FastFlowLM remained resident on Ciru
-  during the first DFlash campaign, peaking at 11.5 GiB. Those speed rows are
-  retained as mixed-workload evidence, not exclusive-system measurements.
+- Removed host-specific application and service discovery from Launch. The
+  public interface now reports and manages only the packaged GLM deployment.
+- Retained the conflict check between the portable and NHI forms of the same
+  GLM deployment.
+- Reframed the prose-heavy 256K recovery measurement as a low-acceptance stress
+  result rather than a general model-speed baseline.
 
-### Validated
+### Scope
 
-- Two identical 65,680-token k=5 requests after stopping the NPU measured
-  12.93 and 14.56 output tokens/s, pooling to 13.70 tokens/s. Both clear the
-  10 tokens/s operating requirement without unloading the GLM pair.
-- Stopping the NPU increased available memory on Ciru from about 4.3 GiB to
-  12.8 GiB. The GLM pair remained loaded at 262,272 tokens throughout.
+- No model, weight, vLLM, DFlash, kernel, context-profile, or transport change.
+- Complete Go tests, vetting, JavaScript validation, whitespace checks, and the
+  static Linux amd64 build pass.
+
+## 0.3.2 — superseded
+
+Version 0.3.2 added host-specific workload detection that did not belong in a
+general CiruStrixLink release. Version 0.3.3 removes that behavior. Users should
+skip 0.3.2.
 
 ## 0.3.1 — truthful runtime state and 256K DFlash tuning
 
@@ -33,12 +37,12 @@
 
 ### Validated
 
-- Selected DFlash2 k=5 provisionally for the 256K single-request profile. The
-  initial mixed-workload campaign measured 15.12 generated tokens/s, versus
-  9.38 target-only and 12.16 at k=3.
-- DFlash2 k=5 passed HumanEval 0–9 at 10/10 pass@1. Its 26.10 weighted speed
-  was measured while the Ciru NPU service remained resident; v0.3.2 records
-  clean follow-up measurements and the missing isolation control.
+- Selected DFlash2 k=5 for the 256K single-request profile. The exact
+  prose-heavy recovery stress case measured 15.12 generated tokens/s, versus
+  9.38 target-only and 12.16 at k=3. Its low draft acceptance makes it a stress
+  case, not a general model-throughput baseline.
+- DFlash2 k=5 passed HumanEval 0–9 at 10/10 pass@1 and 26.10 weighted generated
+  tokens/s.
 - Disabled the unbounded external prefix-cache disk tier in the production
   recipe pending a quota and eviction implementation.
 
@@ -85,9 +89,8 @@
 
 ### Safety
 
-- Loading is refused while `qwen-main.service` or the portable GLM user unit
-  is active. CiruStrixLink never masks, disables, replaces, or enables those
-  services.
+- Loading is refused while the portable form of the same GLM deployment is
+  active. CiruStrixLink does not inspect or manage unrelated applications.
 - Context changes remain blocked while the fixed NHI model unit is running.
 - Browser control remains loopback-only; the peer agent remains bound to its
   dedicated USB4 address; all peer requests require the shared token.

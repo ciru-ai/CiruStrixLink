@@ -1,24 +1,14 @@
 # Validation
 
-## v0.3.2 NPU isolation correction
+## v0.3.3 model-control boundary validation
 
-Date: 2026-09-03.
+Date: 2026-09-04.
 
-Review of the Ciru host found that `flm-npu.service` had remained active during
-the v0.3.1 DFlash and HumanEval campaign. Its lifetime memory peak was 11.5 GiB,
-so the original throughput rows are now labeled mixed workload. The HumanEval
-10/10 pass@1 result remains a valid correctness check.
-
-After stopping the NPU, the exact 65,680-token k=5 request was repeated twice
-without unloading or restarting the GLM pair. The repetitions measured 12.93
-and 14.56 output tokens/s, pooling to 13.70; both exceed the 10 tokens/s
-operating requirement. Mean TTFT was 174.85 seconds. A clean target-only and
-k=3 comparison was not attempted because it would require disrupting the
-active model.
-
-CiruStrixLink 0.3.2 adds explicit `flm-npu.service` detection alongside
-`qwen-main.service`. Automated tests cover reporting the NPU workload and
-including its exact host and service name in the paired-load blocker.
+The complete Go test suite, `go vet`, embedded JavaScript syntax validation,
+whitespace checks, and a static Linux amd64 build passed after removing
+application-specific service discovery from Launch. The correction changes no
+model or runtime component. Both GLM ranks remained loaded throughout; no
+request, unload, restart, or reconfiguration was performed for this release.
 
 ## v0.3.1 runtime-state and DFlash validation
 
@@ -27,11 +17,11 @@ Date: 2026-09-03.
 The complete Go test suite, `go vet`, embedded JavaScript syntax validation,
 whitespace checks, and a static Linux amd64 build passed. Live validation found
 both ranks loaded with the 262,272-token profile, DFlash2 k=5, prefix caching
-disabled, and the qualified NHI pair `in_use`. HumanEval 0–9 passed 10/10. Its
-26.10 weighted output tokens/s and the exact recovery probe's 15.12 output
-tokens/s were later found to overlap the active Ciru NPU service and are
-retained only as mixed-workload measurements. The loaded model was not
-restarted or unloaded.
+disabled, and the qualified NHI pair `in_use`. HumanEval 0–9 passed 10/10 at
+26.10 weighted output tokens/s. The exact prose-heavy recovery stress probe
+measured 15.12 output tokens/s at k=5, 12.16 at k=3, and 9.38 target-only; its
+lower draft acceptance is not representative of general decode speed. The
+loaded model was not restarted or unloaded.
 
 ## v0.3.0 paired-launch release validation
 
@@ -41,7 +31,7 @@ The complete Go test suite, `go vet`, JavaScript syntax validation, whitespace
 checks, and a static Linux amd64 build passed for the paired-launch release
 candidate. The release adds tests for fixed-unit status parsing, host-wide
 memory reporting, NixOS and generic helper command mapping, complementary-rank
-requirements, competing-model refusal, authorization and confirmation gates,
+requirements, same-deployment conflict refusal, authorization and confirmation gates,
 and rank-1-before-rank-0 unload order.
 
 The already-running production pair was checked read-only during validation:

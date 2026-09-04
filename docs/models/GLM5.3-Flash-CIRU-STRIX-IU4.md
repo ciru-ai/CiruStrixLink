@@ -17,7 +17,7 @@ only to identify compatible hardware and software.
 
 ## 1. Install the bundled CiruStrixLink release on both hosts
 
-The model repository includes the qualified CiruStrixLink 0.3.2 archive. Use an
+The model repository includes the qualified CiruStrixLink 0.3.3 archive. Use an
 isolated Python environment for the Hugging Face CLI, then extract the bundled
 binary:
 
@@ -27,7 +27,7 @@ python3 -m venv "$HF_ENV"
 "$HF_ENV/bin/pip" install -U huggingface_hub
 HF="$HF_ENV/bin/hf"
 
-VERSION=0.3.2
+VERSION=0.3.3
 MODEL_REPO=jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4
 mkdir -p /tmp/ciru-strixlink-release
 "$HF" download "$MODEL_REPO" \
@@ -102,14 +102,13 @@ also requires a fixed IPv4 peer on each process, a shared token, a model
 frontend URL on the console, and the console's default loopback-only listener.
 
 The helper accepts only this model, the three packaged context profiles, and
-start/stop on its static NHI unit. It never enables a rank at boot and never
-changes, masks, disables, or replaces `qwen-main.service`. The Launch page
+start/stop on its static NHI unit. It never enables a rank at boot and does not
+inspect or manage unrelated applications or services. The Launch page
 configures both ranks before starting rank 0 and then rank 1; unloading stops
 rank 1 and then rank 0. If rank 1 cannot start, it attempts to stop rank 0
 again and reports the incomplete recovery instead of claiming success.
-Loading is refused while `qwen-main.service` or the portable GLM user unit is
-active, so the selector-owned main model and this NHI deployment cannot compete
-for the same machine memory.
+Loading is refused while the portable GLM user unit is active, so the two
+packaged forms of this same deployment cannot contend for its files and ports.
 
 ## 2. Configure and qualify the USB4 network
 

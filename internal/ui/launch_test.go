@@ -64,21 +64,18 @@ func TestLaunchControllerInspectsFixedNHIService(t *testing.T) {
 	}
 }
 
-func TestLaunchControllerReportsActiveNPUWorkload(t *testing.T) {
+func TestLaunchControllerDoesNotInspectUnrelatedServices(t *testing.T) {
 	var actions []string
 	var mu sync.Mutex
-	c := fakeLaunchController("ciru", "crown", 1, true, &actions, &mu)
+	c := fakeLaunchController("sozo", "halo", 0, false, &actions, &mu)
 	run := c.run
 	c.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name == "systemctl" && len(args) > 2 && args[0] == "--user" && args[2] == "flm-npu.service" {
-			return []byte("ActiveState=active\n"), nil
+		if name == "systemctl" && len(args) > 0 && args[0] == "--user" {
+			t.Fatalf("Launch inspected an unrelated user service: %v", args)
 		}
 		return run(ctx, name, args...)
 	}
-	s := c.inspect(context.Background())
-	if s.CompetingModel != "flm-npu.service" {
-		t.Fatalf("competing model = %q", s.CompetingModel)
-	}
+	c.inspect(context.Background())
 }
 
 func TestLaunchRuntimeRequiresMatchingRankSettings(t *testing.T) {
@@ -174,15 +171,6 @@ func TestLaunchStatusRequiresTwoComplementaryRanks(t *testing.T) {
 	s = combineLaunchStatus(local, &peer, "ok", "", true)
 	if s.State != "loaded" || !s.CanUnload {
 		t.Fatalf("unexpected loaded status: %#v", s)
-	}
-}
-
-func TestLaunchStatusBlocksLoadWhileMainModelIsActive(t *testing.T) {
-	local := launchNodeStatus{Hostname: "sozo", Rank: 0, Installed: true, State: "stopped", Profile: 3, ControlEnabled: true, CompetingModel: "flm-npu.service"}
-	peer := launchNodeStatus{Hostname: "ciru", Rank: 1, Installed: true, State: "stopped", Profile: 3, ControlEnabled: true}
-	s := combineLaunchStatus(local, &peer, "ok", "", true)
-	if s.CanLoad || len(s.Blockers) == 0 || !strings.Contains(s.Blockers[len(s.Blockers)-1], "sozo (flm-npu.service)") {
-		t.Fatalf("unexpected competing-model status: %#v", s)
 	}
 }
 
