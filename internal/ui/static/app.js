@@ -1245,6 +1245,9 @@ function vLaunch() {
   const canAct = action === "load" ? s.can_load : s.can_unload;
   const profileLocked = loaded || partial || l.busy;
   const actionLabel = l.busy ? (action === "load" ? "Loading both ranks…" : "Unloading both ranks…") : action === "load" ? "Load on both machines" : "Unload from both machines";
+  const speculation = s.model.speculation_known ? s.model.speculation : s.model.speculation || "State unknown";
+  const prefixCache = !s.model.prefix_cache_known ? "State unknown" : s.model.prefix_cache ? "Enabled · memory + NVMe" : "Disabled · no disk tier";
+  const fastLink = s.fast_link_ready ? `NHI · ${(s.fast_link_state || "ready").replace(/_/g, " ")}` : s.fast_link_state ? `${s.fast_link_state.replace(/_/g, " ")} · ${s.fast_link_summary || "check both machines"}` : "State unknown";
   const profiles = (s.profiles || []).map((p) => `<button class="launch-profile ${p.experimental ? "experimental" : ""}" data-set="launch.profile" data-val="${p.id}" aria-pressed="${Number(l.profile) === p.id}" ${profileLocked ? "disabled" : ""}>
     <span class="launch-profile-top"><b>${esc(p.name)}</b>${p.recommended ? `<span class="st ok">Recommended</span>` : p.experimental ? `<span class="st warn">Experimental</span>` : ""}</span>
     <span>${p.context_window.toLocaleString()} tokens</span><small>${Math.round(p.kv_cache_bytes / 1073741824)} GiB KV cache per machine · ${esc(p.note)}</small>
@@ -1267,7 +1270,7 @@ function vLaunch() {
       </section>
       <section class="launch-panel"><div class="launch-panel-head"><div><span class="setup-kicker">2 · Validated recipe</span><h2>Runtime parameters</h2></div><span class="st off">Fixed together</span></div>
         <p class="launch-intro">These values belong to the tested GLM build and stay locked so the two ranks cannot drift.</p>
-        <dl class="launch-specs"><div><dt>Parallel layout</dt><dd>TP2 · 1 rank per machine</dd></div><div><dt>Speculative decode</dt><dd>DFlash2 · 7 tokens</dd></div><div><dt>Concurrent requests</dt><dd>${s.model.max_sequences}</dd></div><div><dt>Batch token limit</dt><dd>${s.model.max_batched_tokens.toLocaleString()}</dd></div><div><dt>Prefix cache</dt><dd>${s.model.prefix_cache ? "Enabled · memory + NVMe" : "Disabled"}</dd></div><div><dt>Transport</dt><dd>Direct USB4 · NHI</dd></div></dl>
+        <dl class="launch-specs"><div><dt>Parallel layout</dt><dd>TP2 · PP1 · 1 rank per machine</dd></div><div><dt>Speculative decode</dt><dd>${esc(speculation)}</dd></div><div><dt>Concurrent requests</dt><dd>${s.model.max_sequences}</dd></div><div><dt>Batch token limit</dt><dd>${s.model.max_batched_tokens.toLocaleString()}</dd></div><div><dt>Prefix cache</dt><dd>${esc(prefixCache)}</dd></div><div><dt>Fast USB4 transport</dt><dd>${esc(fastLink)}</dd></div></dl>
       </section>
     </div>
     <section class="launch-action tone-${tone}"><div class="launch-action-copy"><span class="setup-kicker">3 · Paired action</span><h2>${action === "load" ? "Load the model" : "Unload the model"}</h2><p>${action === "load" ? `Applies the ${esc((s.profiles || []).find((p) => p.id === Number(l.profile))?.name || "selected")} profile to both machines, then starts rank 0 followed by rank 1.` : "Stops rank 1 and rank 0 as one operation. The lightweight API frontend can remain available while the weights are unloaded."}</p>

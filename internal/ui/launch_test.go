@@ -17,7 +17,7 @@ func fakeLaunchController(host, username string, rank int, active bool, actions 
 		state, sub, pid = "active", "running", "123"
 	}
 	return &launchController{
-		enabled: true, hostname: host, username: username, helper: "/usr/bin/true",
+		enabled: true, hostname: host, username: username, homeDir: "/home/" + username, helper: "/usr/bin/true",
 		helperOK:  func(string) bool { return true },
 		controlOK: func(context.Context) bool { return true },
 		run: func(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -39,6 +39,10 @@ func fakeLaunchController(host, username string, rank int, active bool, actions 
 			switch {
 			case path == "/proc/meminfo":
 				return []byte("MemTotal:       131072000 kB\nMemAvailable:  16777216 kB\n"), nil
+			case strings.HasSuffix(path, "/dflash-tokens"):
+				return []byte("5\n"), nil
+			case strings.HasSuffix(path, "/prefix-cache-enabled"):
+				return []byte("0\n"), nil
 			case strings.Contains(path, "/node-"):
 				return []byte(fmt.Sprintf("NODE_RANK=%d\n", rank)), nil
 			case strings.Contains(path, "/context-"):
@@ -55,8 +59,33 @@ func TestLaunchControllerInspectsFixedNHIService(t *testing.T) {
 	var mu sync.Mutex
 	c := fakeLaunchController("sozo", "halo", 0, true, &actions, &mu)
 	s := c.inspect(context.Background())
-	if !s.Installed || s.State != "loaded" || s.Rank != 0 || s.Profile != 2 || s.Context != 131200 || s.KVBytes != 12<<30 || s.RAMTotalBytes != 125<<30 || s.RAMAvailBytes != 16<<30 || s.RAMUsedBytes != 109<<30 {
+	if !s.Installed || s.State != "loaded" || s.Rank != 0 || s.Profile != 2 || s.Context != 131200 || s.KVBytes != 12<<30 || s.RAMTotalBytes != 125<<30 || s.RAMAvailBytes != 16<<30 || s.RAMUsedBytes != 109<<30 || !s.DFlashKnown || s.DFlashTokens != 5 || !s.PrefixKnown || s.PrefixCache {
 		t.Fatalf("unexpected status: %#v", s)
+	}
+}
+
+func TestLaunchRuntimeRequiresMatchingRankSettings(t *testing.T) {
+	local := launchNodeStatus{DFlashKnown: true, DFlashTokens: 5, PrefixKnown: true, PrefixCache: false}
+	peer := launchNodeStatus{DFlashKnown: true, DFlashTokens: 5, PrefixKnown: true, PrefixCache: false}
+	model := launchModel()
+	applyLaunchRuntime(&model, local, peer)
+	if !model.SpeculationKnown || model.Speculation != "DFlash2 · 5 draft tokens" || !model.PrefixCacheKnown || model.PrefixCache {
+		t.Fatalf("unexpected matched runtime: %#v", model)
+	}
+
+	peer.DFlashTokens = 3
+	peer.PrefixCache = true
+	model = launchModel()
+	applyLaunchRuntime(&model, local, peer)
+	if model.SpeculationKnown || model.Speculation != "Ranks disagree" || model.PrefixCacheKnown {
+		t.Fatalf("unexpected mismatched runtime: %#v", model)
+	}
+
+	local.DFlashTokens, peer.DFlashTokens = 0, 0
+	model = launchModel()
+	applyLaunchRuntime(&model, local, peer)
+	if !model.SpeculationKnown || model.Speculation != "Disabled · target-only" {
+		t.Fatalf("unexpected target-only runtime: %#v", model)
 	}
 }
 

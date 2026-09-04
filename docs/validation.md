@@ -1,5 +1,16 @@
 # Validation
 
+## v0.3.1 runtime-state and DFlash validation
+
+Date: 2026-09-03.
+
+The complete Go test suite, `go vet`, embedded JavaScript syntax validation,
+whitespace checks, and a static Linux amd64 build passed. Live validation found
+both ranks loaded with the 262,272-token profile, DFlash2 k=5, prefix caching
+disabled, and the qualified NHI pair `in_use`. HumanEval 0–9 passed 10/10 at
+26.10 weighted output tokens/s. The exact 65,680-token recovery probe sustained
+15.12 output tokens/s. The loaded model was not restarted or unloaded.
+
 ## v0.3.0 paired-launch release validation
 
 Date: 2026-09-03.

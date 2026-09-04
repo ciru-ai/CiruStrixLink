@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.1 — truthful runtime state and 256K DFlash tuning
+
+### Fixed
+
+- Replaced hardcoded DFlash and prefix-cache labels on the Launch page with
+  settings reported independently by both ranks. Missing values now remain
+  explicitly unknown, and conflicting values are shown as a rank mismatch.
+- The Overview model card now derives its DFlash label from the managed
+  launcher setting when no manual display override is supplied.
+- Distinguished TP2 from PP1 in the runtime recipe and exposed the live Fast
+  USB4 state separately from speculative decoding.
+
+### Validated
+
+- Selected DFlash2 k=5 for the 256K single-request profile. The exact
+  65,680-token recovery prompt sustained 15.12 generated tokens/s, versus 9.38
+  target-only and 12.16 at k=3.
+- DFlash2 k=5 passed HumanEval 0–9 at 10/10 pass@1 and 26.10 weighted generated
+  tokens/s, slightly above the prior k=7 production gate.
+- Disabled the unbounded external prefix-cache disk tier in the production
+  recipe pending a quota and eviction implementation.
+
 ## 0.3.0 — paired launch and operator UX
 
 ### Added

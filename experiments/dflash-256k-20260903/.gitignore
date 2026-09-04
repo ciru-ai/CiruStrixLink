@@ -1,0 +1,7 @@
+# Raw prompts, model responses, host-specific controls, and profiler summaries
+# remain in the private benchmark workspace. Commit only the public protocol
+# and aggregate results from this directory.
+results/
+settings/
+pagoda_long_context_probe.py
+summarize_trace.py

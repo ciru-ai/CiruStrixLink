@@ -90,7 +90,15 @@ func (c *Console) handleModel(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, modelStatus{State: "unconfigured", CollectedAt: time.Now().UTC()})
 		return
 	}
-	writeJSON(w, http.StatusOK, c.model.collect(r.Context()))
+	s := c.model.collect(r.Context())
+	if s.Speculation == "" && c.launch != nil {
+		var runtime launchNodeStatus
+		c.launch.readRuntimeSettings(&runtime)
+		if runtime.DFlashKnown {
+			s.Speculation = dflashLabel(runtime.DFlashTokens)
+		}
+	}
+	writeJSON(w, http.StatusOK, s)
 }
 
 // Only the operator-configured frontend is read. No generation, discovery,

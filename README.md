@@ -14,9 +14,22 @@ an IP socket can use the portable transport. The optional NHI transport is also
 model-neutral at the link layer; a runtime needs a small adapter capable of
 importing its DMA-BUF. vLLM is one supported overlay, not the owner of the link.
 
-> **CiruStrixLink 0.3.0** adds the redesigned setup workflow and an opt-in
-> paired Launch page for GLM5.3 Flash CIRU STRIX IU4. See
-> [what changed](#whats-new-in-030) and the [changelog](CHANGELOG.md).
+> **CiruStrixLink 0.3.1** reports the actual DFlash, prefix-cache, and Fast
+> USB4 state for both GLM5.3 ranks. It includes the redesigned setup workflow
+> and opt-in paired Launch page introduced in 0.3.0. See the
+> [changelog](CHANGELOG.md).
+
+## What's new in 0.3.1
+
+- Launch reads DFlash and prefix-cache settings independently from both model
+  hosts and shows them as known only when the ranks agree.
+- Overview derives its DFlash label from the managed launcher instead of
+  requiring a hand-written display-only environment variable.
+- The validated 256K recipe is DFlash2 k=5 with prefix caching disabled. The
+  exact 65,680-token recovery prompt sustained 15.12 output tokens/s, and the
+  HumanEval 0–9 gate passed 10/10 at 26.10 weighted tokens/s.
+- Fast USB4 transport is reported separately from speculative decoding, and
+  the runtime recipe now explicitly shows TP2 with PP1.
 
 ## What's new in 0.3.0
 
@@ -121,7 +134,7 @@ Run this on both Strix Halo hosts. Set `VERSION` to the release you want to
 install:
 
 ```bash
-VERSION=0.3.0
+VERSION=0.3.1
 curl -fL \
   -o /tmp/ciru-strixlink.tar.gz \
   "https://github.com/ciru-ai/CiruStrixLink/releases/download/v${VERSION}/ciru-strixlink-${VERSION}-linux-amd64.tar.gz"
@@ -409,7 +422,10 @@ excluding bonus target tokens. It uses the latest reported counter increment,
 or a clearly labeled since-start total before the first increment. No new drafts
 retain the previous sample and its timestamp, rather than showing zero. Set
 `CIRU_STRIXLINK_MODEL_SPECULATION=DFlash2` to label the existing speculative
-runtime; this is a display label and does not enable or alter speculation.
+runtime when using a launcher without managed runtime settings; this is a
+display fallback and does not enable or alter speculation. The managed GLM 5.3
+launcher instead reports the validated `dflash-tokens` setting directly, and
+the Launch page requires both ranks to agree before presenting it as known.
 
 To review reports a peer sent over, reconcile files instead of a live agent:
 

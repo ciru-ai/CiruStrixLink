@@ -2,7 +2,7 @@
 
 This is the public two-node transport recipe for **GLM5.3 Flash CIRU STRIX
 IU4**. The tested production path uses two 128-GiB AMD Strix Halo systems,
-Linux 7.2.2, ROCm 10, vLLM V2, TP2, DFlash2 k=7, and direct USB4 NHI transport
+Linux 7.2.2, ROCm 10, vLLM V2, TP2, PP1, DFlash2 k=5, and direct USB4 NHI transport
 for the exposed M8 all-reduce.
 
 The model is not a portable one-command Transformers checkpoint. Its rank-local
@@ -17,7 +17,7 @@ only to identify compatible hardware and software.
 
 ## 1. Install the bundled CiruStrixLink release on both hosts
 
-The model repository includes the qualified CiruStrixLink 0.3.0 archive. Use an
+The model repository includes the qualified CiruStrixLink 0.3.1 archive. Use an
 isolated Python environment for the Hugging Face CLI, then extract the bundled
 binary:
 
@@ -27,7 +27,7 @@ python3 -m venv "$HF_ENV"
 "$HF_ENV/bin/pip" install -U huggingface_hub
 HF="$HF_ENV/bin/hf"
 
-VERSION=0.3.0
+VERSION=0.3.1
 MODEL_REPO=jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4
 mkdir -p /tmp/ciru-strixlink-release
 "$HF" download "$MODEL_REPO" \
@@ -286,15 +286,28 @@ does not belong in this ordinary-user flow; use the capability-bearing system
 unit in section 7.
 
 The launcher preserves the release configuration: packaged GLM chat template,
-official `temperature=1.0` and `top_p=0.95`, V2, TP2, DFlash2 k=7, selectable
+official `temperature=1.0` and `top_p=0.95`, V2, TP2, PP1, DFlash2 k=5, selectable
 64K/128K/256K context and KV profiles, chunked prefill, and the GLM tool and
 reasoning parsers.
 
-It also enables vLLM automatic prefix caching with a host LRU tier and a
-persistent local-NVMe filesystem tier. Only prompt blocks are offloaded;
-generated tails are not written to disk. The filesystem cache has no built-in
-byte quota, so place it in a dedicated cache directory or quota-managed
-filesystem and monitor its size.
+The current production recipe disables automatic prefix caching. The external
+filesystem tier has no built-in byte quota and can fill its backing filesystem;
+do not enable it until the deployment supplies a real quota and eviction policy.
+
+The managed NHI launcher reads two small runtime settings from
+`~/.config/ciru-glm53-iu4/` on each rank. Keep them identical and change them
+only while the pair is stopped:
+
+```text
+dflash-tokens          # one integer from 0 through 7; production default: 5
+prefix-cache-enabled   # 0 disables the cache; current production value: 0
+```
+
+Setting `dflash-tokens` to `0` is a true target-only run: the launcher omits the
+speculative configuration instead of merely changing a display label. Invalid
+values stop the launch with an error; missing files use the packaged k=5 and
+cache-off defaults. The Launch page reports these settings only when both ranks
+agree; otherwise it shows an unknown or mismatched state.
 
 ## 6. Install the ordinary user service
 

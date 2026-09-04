@@ -49,9 +49,11 @@ type launchModelInfo struct {
 	Topology         string `json:"topology"`
 	Transport        string `json:"transport"`
 	Speculation      string `json:"speculation"`
+	SpeculationKnown bool   `json:"speculation_known"`
 	MaxSequences     int    `json:"max_sequences"`
 	MaxBatchedTokens int    `json:"max_batched_tokens"`
 	PrefixCache      bool   `json:"prefix_cache"`
+	PrefixCacheKnown bool   `json:"prefix_cache_known"`
 }
 
 type launchNodeStatus struct {
@@ -73,6 +75,10 @@ type launchNodeStatus struct {
 	RAMTotalBytes  int64  `json:"ram_total_bytes,omitempty"`
 	RAMUsedBytes   int64  `json:"ram_used_bytes,omitempty"`
 	RAMAvailBytes  int64  `json:"ram_available_bytes,omitempty"`
+	DFlashTokens   int    `json:"dflash_tokens"`
+	DFlashKnown    bool   `json:"dflash_known"`
+	PrefixCache    bool   `json:"prefix_cache_enabled"`
+	PrefixKnown    bool   `json:"prefix_cache_known"`
 }
 
 type launchStatus struct {
@@ -117,6 +123,7 @@ type launchCommandRunner func(context.Context, string, ...string) ([]byte, error
 type launchController struct {
 	enabled        bool
 	username       string
+	homeDir        string
 	hostname       string
 	helper         string
 	helperKind     string
@@ -160,7 +167,11 @@ func newLaunchController(enabled bool, configuredRank *int, peer string) *launch
 	if _, err := os.Stat(launchNixSudoPath); err == nil {
 		sudo = launchNixSudoPath
 	}
-	c := &launchController{enabled: enabled, username: username, hostname: hostname, helper: helper, helperKind: helperKind, sudo: sudo, peer: peer, run: commandOutput, readFile: os.ReadFile, helperOK: fileOwnerIsRoot}
+	homeDir := ""
+	if u != nil {
+		homeDir = u.HomeDir
+	}
+	c := &launchController{enabled: enabled, username: username, homeDir: homeDir, hostname: hostname, helper: helper, helperKind: helperKind, sudo: sudo, peer: peer, run: commandOutput, readFile: os.ReadFile, helperOK: fileOwnerIsRoot}
 	if configuredRank != nil && (*configuredRank == 0 || *configuredRank == 1) {
 		rank := *configuredRank
 		c.configuredRank = &rank
@@ -256,6 +267,38 @@ func profileFromValues(values map[string]string) (launchProfile, bool) {
 	return launchProfile{}, false
 }
 
+func (c *launchController) readRuntimeSettings(s *launchNodeStatus) {
+	if c.homeDir == "" {
+		return
+	}
+	dir := filepath.Join(c.homeDir, ".config", "ciru-glm53-iu4")
+	if body, err := c.readFile(filepath.Join(dir, "dflash-tokens")); err == nil {
+		if value, err := strconv.Atoi(strings.TrimSpace(string(body))); err == nil && value >= 0 && value <= 7 {
+			s.DFlashTokens, s.DFlashKnown = value, true
+		}
+	}
+	if body, err := c.readFile(filepath.Join(dir, "prefix-cache-enabled")); err == nil {
+		switch strings.TrimSpace(string(body)) {
+		case "0":
+			s.PrefixCache, s.PrefixKnown = false, true
+		case "1":
+			s.PrefixCache, s.PrefixKnown = true, true
+		}
+	}
+}
+
+func applyRuntimeValues(s *launchNodeStatus, values map[string]string) {
+	if value, err := strconv.Atoi(strings.TrimSpace(values["DFLASH_TOKENS"])); err == nil && value >= 0 && value <= 7 {
+		s.DFlashTokens, s.DFlashKnown = value, true
+	}
+	switch strings.TrimSpace(values["PREFIX_CACHE_ENABLED"]) {
+	case "0":
+		s.PrefixCache, s.PrefixKnown = false, true
+	case "1":
+		s.PrefixCache, s.PrefixKnown = true, true
+	}
+}
+
 func (c *launchController) inspect(ctx context.Context) launchNodeStatus {
 	controlEnabled := c.enabled && c.controlOK != nil && c.controlOK(ctx)
 	s := launchNodeStatus{Hostname: c.hostname, Username: c.username, Rank: -1, State: "unavailable", ControlEnabled: controlEnabled}
@@ -289,9 +332,10 @@ func (c *launchController) inspect(ctx context.Context) launchNodeStatus {
 	} else if unit["ActiveState"] == "failed" {
 		s.State = "failed"
 	}
+	node, _ := c.readFile(fmt.Sprintf("/etc/ciru-glm53-iu4/node-%s.env", c.username))
+	nodeValues := keyValues(node)
+	applyRuntimeValues(&s, nodeValues)
 	if s.Rank == -1 {
-		node, _ := c.readFile(fmt.Sprintf("/etc/ciru-glm53-iu4/node-%s.env", c.username))
-		nodeValues := keyValues(node)
 		if _, ok := nodeValues["NODE_RANK"]; ok {
 			s.Rank = intValue(nodeValues, "NODE_RANK")
 		}
@@ -305,6 +349,7 @@ func (c *launchController) inspect(ctx context.Context) launchNodeStatus {
 	if mainState, err := c.run(ctx, "systemctl", "--user", "show", "qwen-main.service", "--no-pager", "--property=ActiveState"); err == nil && keyValues(mainState)["ActiveState"] == "active" {
 		s.CompetingModel = "qwen-main.service"
 	}
+	c.readRuntimeSettings(&s)
 	contextBody, _ := c.readFile(fmt.Sprintf("/etc/ciru-glm53-iu4/context-%s.env", c.username))
 	contextValues := keyValues(contextBody)
 	if p, ok := profileFromValues(contextValues); ok {
@@ -380,7 +425,28 @@ func (c *launchController) transport(ctx context.Context) (transport.Report, err
 }
 
 func launchModel() launchModelInfo {
-	return launchModelInfo{Name: launchModelName, Topology: "2 machines · tensor parallel 2", Transport: "Direct USB4 · NHI", Speculation: "DFlash2 · 7 draft tokens", MaxSequences: 1, MaxBatchedTokens: 2304, PrefixCache: true}
+	return launchModelInfo{Name: launchModelName, Topology: "2 machines · tensor parallel 2", Transport: "Direct USB4 · NHI", Speculation: "State unknown", MaxSequences: 1, MaxBatchedTokens: 2304}
+}
+
+func dflashLabel(tokens int) string {
+	if tokens == 0 {
+		return "Disabled · target-only"
+	}
+	return fmt.Sprintf("DFlash2 · %d draft tokens", tokens)
+}
+
+func applyLaunchRuntime(model *launchModelInfo, local launchNodeStatus, peer launchNodeStatus) {
+	switch {
+	case local.DFlashKnown && peer.DFlashKnown && local.DFlashTokens == peer.DFlashTokens:
+		model.SpeculationKnown = true
+		model.Speculation = dflashLabel(local.DFlashTokens)
+	case local.DFlashKnown && peer.DFlashKnown:
+		model.Speculation = "Ranks disagree"
+	}
+	if local.PrefixKnown && peer.PrefixKnown && local.PrefixCache == peer.PrefixCache {
+		model.PrefixCacheKnown = true
+		model.PrefixCache = local.PrefixCache
+	}
 }
 
 func combineLaunchStatus(local launchNodeStatus, peer *launchNodeStatus, peerState, peerErr string, control bool) launchStatus {
@@ -389,6 +455,7 @@ func combineLaunchStatus(local launchNodeStatus, peer *launchNodeStatus, peerSta
 		s.Blockers = append(s.Blockers, "The second machine is not reporting model status.")
 		return s
 	}
+	applyLaunchRuntime(&s.Model, local, *peer)
 	if !local.Installed || !peer.Installed {
 		s.State, s.Summary = "not_installed", "GLM 5.3 is not installed for paired launch on both machines."
 		s.Blockers = append(s.Blockers, "Install the fixed GLM 5.3 NHI service on both machines.")
