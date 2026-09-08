@@ -41,8 +41,8 @@ through an authenticated tunnel; it does not run the privileged helper.
 The coordinator uses this transaction:
 
 1. Inspect both fixed system units and reject missing or duplicate ranks.
-2. Reject load while a selector-owned main model or portable GLM unit is
-   active on either host.
+2. Reject load while the portable form of this same GLM deployment is
+   active on either host. Unrelated applications remain the operator’s responsibility.
 3. Obtain scoped privileged transport reports from both hosts and require a
    qualified, available NHI pair.
 4. Configure the selected profile on both stopped ranks.

@@ -1,0 +1,70 @@
+From 4c9c48479c2a6d17ccd04619bbfcdb9ec7572869 Mon Sep 17 00:00:00 2001
+From: Codex USB4STREAM Analysis <codex-local@invalid>
+Date: Sun, 30 Aug 2026 05:48:08 -0400
+Subject: [PATCH 16/16] thunderbolt: Clear stale MSI-X status before ring arm
+
+NHIs without interrupt auto-clear can retain a per-ring pending status bit
+after an MSI-X ring is masked and torn down. When a new stream reuses the
+same HopID, enabling an already-asserted status does not necessarily generate
+a new edge. Hardware descriptor indices can then advance while no handler
+runs and software never harvests the completions.
+
+The existing ring_clear_msix() only runs after an interrupt has entered the
+handler, so it cannot repair a missing first interrupt. Reuse it while the
+ring is still masked, after programming the MSI-X mode, vector, and throttle
+but before setting the ring interrupt enable bit. Read the side-effect-free
+enable register back after arming so all posted routing and enable writes
+reach the NHI before the lock is released.
+
+Limit the new sequence to per-ring MSI-X. The shared-MSI path continues to
+use the notification-register flow.
+
+Link: https://patchew.org/linux/20260428015521.3454006-1-benjamin.s.berman@gmail.com/20260428015521.3454006-2-benjamin.s.berman@gmail.com/
+---
+ drivers/thunderbolt/nhi.c | 17 +++++++++++++++--
+ 1 file changed, 15 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/thunderbolt/nhi.c b/drivers/thunderbolt/nhi.c
+index 17bf858e2..d5db66e2d 100644
+--- a/drivers/thunderbolt/nhi.c
++++ b/drivers/thunderbolt/nhi.c
+@@ -48,6 +48,8 @@ static int ring_interrupt_index(const struct tb_ring *ring)
+ 	return bit;
+ }
+ 
++static void ring_clear_msix(const struct tb_ring *ring);
++
+ static void nhi_mask_interrupt(struct tb_nhi *nhi, int mask, int ring)
+ {
+ 	if (nhi->quirks & QUIRK_AUTO_CLEAR_INT) {
+@@ -128,6 +130,14 @@ static void ring_interrupt_active(struct tb_ring *ring, bool active)
+ 			  ring->vector * 4);
+ 	}
+ 
++	/*
++	 * Non-auto-clear hosts can retain a ring's pending status after the
++	 * ring is stopped. Clear it after programming MSI-X routing but before
++	 * enabling a reused ring so its first completion can raise an edge.
++	 */
++	if (active && ring->irq > 0)
++		ring_clear_msix(ring);
++
+ 	old = ioread32(ring->nhi->iobase + reg);
+ 	if (active)
+ 		new = old | mask;
+@@ -143,10 +153,13 @@ static void ring_interrupt_active(struct tb_ring *ring, bool active)
+ 			 RING_TYPE(ring), ring->hop,
+ 			 str_enabled_disabled(active));
+ 
+-	if (active)
++	if (active) {
+ 		iowrite32(new, ring->nhi->iobase + reg);
+-	else
++		if (ring->irq > 0)
++			ioread32(ring->nhi->iobase + reg);
++	} else {
+ 		nhi_mask_interrupt(ring->nhi, mask, index);
++	}
+ }
+ 
+ /*

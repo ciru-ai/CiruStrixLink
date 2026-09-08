@@ -1,5 +1,9 @@
 # Validation
 
+For GPU collective latency in microseconds, activation/credit timings,
+correctness and measured model impact, start with [the performance report](performance.md).
+The TCP qualification below measures a different boundary.
+
 ## v0.3.3 model-control boundary validation
 
 Date: 2026-09-04.

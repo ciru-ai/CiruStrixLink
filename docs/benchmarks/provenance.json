@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "published_on": "2026-09-08",
+  "description": "Recovered evidence from the original dual Strix development project; no new hardware benchmark was run for this publication. The source record hashes identify the preserved local evidence; only the small M8 raw measurement records are reproduced here.",
+  "source_root_label": "two strix/experiments/h0-foundation-comparison",
+  "source_records": [
+    {
+      "path_in_source_project": "code/glm53_m8_transport_gate_20260831/RESULT.md",
+      "description": "Exact M8 component and earlier serving sequence",
+      "bytes": 10103,
+      "sha256": "2c85efe223947e8cc324e081a59afe96da1f171128cf5a40d1d617938e1b4f66"
+    },
+    {
+      "path_in_source_project": "code/glm53_m8_transport_gate_20260831/m8_transport_gate.py",
+      "description": "Timing boundary: host monotonic clock and GPU synchronization",
+      "bytes": 8731,
+      "sha256": "65f7092d382a87c59239a7138b902bc52195c2d10f41943b280c326dc7872961"
+    },
+    {
+      "path_in_source_project": "results/usb4stream-direct-nhi-20260830/patch16/gpu-dmabuf/README.md",
+      "description": "T1/T128 GPU activation and credit results",
+      "bytes": 2306,
+      "sha256": "55c0328228a41137790246cd317505d2d97ceb4a1f2108d45ecdf3ed058cc736"
+    },
+    {
+      "path_in_source_project": "results/usb4stream-direct-nhi-20260830/patch16/README.md",
+      "description": "Kernel lifecycle and soak qualification",
+      "bytes": 5062,
+      "sha256": "c420969f796e4ff39dcb792a568110091519dc4b4a7b6eaf6260dab1efd00f57"
+    },
+    {
+      "path_in_source_project": "code/glm53_dflash_forced_accept_v0/RESULT.md",
+      "description": "Later aligned transaction and deferred-retirement results",
+      "bytes": 5152,
+      "sha256": "e694b9738192f570f26505874b3b78b753b56f627a2020804de4bbd0cd2cd541"
+    },
+    {
+      "path_in_source_project": "code/glm53_pp768_transport_gate_20260901/RESULT.md",
+      "description": "Exact PP768 component and model row",
+      "bytes": 2284,
+      "sha256": "f4d301ed701497f82d57fb98901fa7e8d41ec6d396b59f202ea48d09a239cca9"
+    },
+    {
+      "path_in_source_project": "code/glm53_m8_bf16_nhi_compare_probe_v0/RESULT.md",
+      "description": "Live numerical equivalence",
+      "bytes": 1014,
+      "sha256": "7eaf8acda72071b93ce23eba60c597ac7972bd8c861aa5bff477c57e368f3d40"
+    }
+  ],
+  "m8_raw_records": [
+    {
+      "path": "m8-rccl.jsonl",
+      "sha256": "90dc89276c234866d9d6f38dafe2af0103d4e0ba21183a4cf922c1e399c66852"
+    },
+    {
+      "path": "m8-bf16_nhi.jsonl",
+      "sha256": "f38a0d8641554b3e27fca1a0330e39cc335114d4f08ca4207ef263da42d52fc2"
+    }
+  ],
+  "published_bridge": {
+    "hf_revision": "a1ab828d8bd5b0ba8e3281febfe3d34b12072040",
+    "source_path_in_archive": "GLM5.3-Flash-CIRU-STRIX-IU4-kernels/nhi-m8-bf16/vllm_nhi_allreduce.cu",
+    "source_sha256": "d7d78538c1a1a6fa492feabb7a03746228c2a18fb96801b48b48ba9cfb4153ae",
+    "completion_mode": "synchronous",
+    "archive_sha256": "88e96a32dbfa01b0bce712d2ded81fbe282452afc59c0961f6c10e7a7a0b2841"
+  }
+}

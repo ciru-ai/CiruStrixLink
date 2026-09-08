@@ -3,6 +3,11 @@
 NHI is an optional acceleration mode over Linux USB4STREAM. It is not required
 for the portable USB4NET socket/RCCL baseline.
 
+The exact kernel dependency is the [qualified Linux 7.2.2 patch series](../../kernel/linux-7.2.2/README.md). It includes the DMA-BUF import ABI and the
+MSI-X reliability fix; installing an unpatched 7.2.2 kernel is insufficient.
+Follow [the two-host setup guide](../getting-started.md#6-enable-the-direct-gpunhi-path)
+for the complete order of operations.
+
 Inspect capability and current lifecycle state without changing the host:
 
 ```bash

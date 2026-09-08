@@ -1,0 +1,16 @@
+9545e5e26b96f1aaacb51380c5a6375db2f7e54e3ed0789c9b2fad8b542897d5  0001-thunderbolt-Allow-clients-to-suppress-per-frame-comp.patch
+19b1b4fee853c40e0cb90673064f9ab7780eecc6245b6b5a523419538b1271c8  0002-thunderbolt-stream-Add-zero-copy-slot-mode.patch
+29575fc591931a4045cb6ccdf213564af5bd4ba51d0266ac8a31d691a7fc3e64  0003-thunderbolt-stream-Require-exclusive-zero-copy-use.patch
+7e1f759ac6f09bef57f43918f9e48c103d6b274778a6c79b9164a1b77eba4ee8  0004-thunderbolt-stream-Add-flagged-RX-reposting.patch
+677a1714558ef82108b2805718bc1df5f59ff14e2026721bcd8e1153ec977e4a  0005-thunderbolt-stream-Interrupt-RX-message-boundaries.patch
+1c355f0baad80eecb52105c1f4b479bf5a3ab8a8f1ae9b1822b299cb42749bf0  0006-thunderbolt-stream-Synchronize-zero-copy-TX-DMA-owne.patch
+8b29b7bb8879026fe41953d202d92b533157324ddcbdd11b801fa7574fe0a5ad  0007-thunderbolt-stream-Harden-zero-copy-mode-transitions.patch
+f21bdf8daca06d38fec46b9ec1c958a954adbfa7aad465a0afd9b78004c935b8  0008-thunderbolt-net-Track-receive-HopID-ownership.patch
+178e21b76616fab691f669f1e5adbf8449aa8134b410185c1f37b97b70a375b2  0009-thunderbolt-stream-Make-HopID-attachment-trans.patch
+ee341f6a449d476944a84b42fe7761bc7f7782d63c294a3b553b7e17c4137bae  0010-thunderbolt-stream-Add-zero-copy-progress-diagnostic.patch
+c57787ddbee8197abd02ed23be89dad73ea4f466bf8f7c350c0c266d91c07889  0011-thunderbolt-Flush-posted-MSI-X-interrupt-clears.patch
+61b40c127b5c29d64fc0b87620aaf72716aa872ba46ebefff5537c3f67d4dbff  0012-thunderbolt-stream-Prime-Rx-ring-before-enabling-DMA.patch
+f663918ae6d4c0b303f91b3703c59340284866f48bad10e160bd5eaa475a132f  0013-thunderbolt-stream-Add-DMA-BUF-import-probe.patch
+77d74b59ed4962255b4e5a05e9bfdfd417e10d918ad25072ba5783f01fae18b6  0014-thunderbolt-stream-Add-imported-DMA-BUF-frame-pools.patch
+2973aa61e62359f509fa41e7aa577d5056049237b1e3f29f60aabd9df8b3f743  0015-thunderbolt-stream-Skip-CLOSE-toward-an-already-closed-peer.patch
+11f562f16a054ab86c3b77554fea6b60f296f0d06e7b15f9e82080bfabaf67ff  0016-thunderbolt-Clear-stale-MSI-X-status-before-ring-arm.patch

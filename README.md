@@ -1,579 +1,198 @@
 # CiruStrixLink
 
-`CiruStrixLink` configures and qualifies a direct Linux USB4 network between two
-AMD Strix Halo systems. It is a single binary: the link tests do not require
-Python, `iperf3`, or `jq`.
+**Direct GPU tensor transport and a two-host operator console for AMD Strix Halo over USB4.**
 
-The tool treats USB4's reported link rate as inventory, not proof. It verifies
-the selected route, source address, path MTU, reconnect behavior, application
-RTT, end-to-end payload integrity, and throughput in each direction. Its JSON
-report and environment file are suitable inputs to a model launcher.
+CiruStrixLink prepares and manages the USB4 connection behind the
+[GLM5.3 Flash CIRU STRIX IU4 deployment](https://huggingface.co/jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4).
+Its direct NHI path uses **GPU-owned DMA-BUF pools and USB4 hardware DMA rings**
+to exchange tensor partials without the TCP/IP payload path. The accompanying
+HIP adapter validates the received message and performs the reduction on the
+GPU. The same connection retains USB4NET for control and other traffic.
 
-The link is model-neutral. Any model server or distributed runtime that can use
-an IP socket can use the portable transport. The optional NHI transport is also
-model-neutral at the link layer; a runtime needs a small adapter capable of
-importing its DMA-BUF. vLLM is one supported overlay, not the owner of the link.
+The project brings that transport together with endpoint discovery,
+correctness checks, runtime configuration and an embedded browser console.
+The measured exact 64-KiB BF16 all-reduce completed in **about 110 µs**, versus
+**about 342 µs** through the matched RCCL socket path. The complete setup
+requires the StrixLink binary, the patched stream driver and a compatible
+runtime adapter; their roles and sources are documented below.
 
-> **CiruStrixLink 0.3.3** keeps model control inside its product boundary:
-> Launch reports and manages the packaged GLM pair without inspecting unrelated
-> host applications or services. It includes the truthful two-rank runtime
-> reporting introduced in 0.3.1. See the
-> [changelog](CHANGELOG.md).
+[Get started](docs/getting-started.md) ·
+[GPU transport architecture](docs/architecture.md) ·
+[Measurements and methodology](docs/performance.md) ·
+[Download v0.3.3](https://github.com/ciru-ai/CiruStrixLink/releases/tag/v0.3.3) ·
+[GLM deployment](docs/models/GLM5.3-Flash-CIRU-STRIX-IU4.md)
 
-## What's new in 0.3.3
+## What makes the transport useful
 
-- Removes application-specific service discovery and policy from Launch.
-- Limits paired-load checks to the two packaged GLM deployment modes, which
-  cannot safely own the same model files and ports at the same time.
-- Clarifies that DFlash throughput depends strongly on draft acceptance: the
-  256K prose recovery probe is a stress case, not the model's general decode
-  speed.
-- Makes no model, weight, vLLM, DFlash, kernel, context, or transport change.
+- **GPU-owned transfer pools.** Dedicated uncached HIP allocations are exported
+  as DMA-BUFs and imported by USB4STREAM. GPU kernels pack TX and consume RX;
+  the CPU manages submission and completion rather than copying tensor payloads
+  through socket buffers.
+- **Exact two-rank reductions.** The published adapter exchanges contiguous
+  BF16 `[8,4096]` partials in both directions and sums on the GPU. Unmatched
+  collectives retain the runtime's existing backend.
+- **Explicit message ownership.** A 32-byte footer carries rank, epoch,
+  sequence and payload length, with a GPU-written commit word. Circular ring
+  addressing, completion accounting and RX reposting govern safe reuse.
+- **A qualified two-host lifecycle.** StrixLink checks both peers, preserves
+  USB4NET's HopID allocation, discovers the stream devices, and requires
+  matching endpoints and an available lease before launching NHI.
+- **An operator console.** Inspect transport state, run bounded TCP link tests,
+  watch model PP/TG and draft acceptance, and optionally configure/load/unload
+  the packaged GLM pair with coordinated readiness and rollback.
 
-## What's new in 0.3.1
+The console is a single static Go binary. Its link tests need no Python,
+`iperf3`, or Go installation. Other runtimes can use the portable IP link;
+using the direct GPU path requires an adapter for their tensor operations.
 
-- Launch reads DFlash and prefix-cache settings independently from both model
-  hosts and shows them as known only when the ranks agree.
-- Overview derives its DFlash label from the managed launcher instead of
-  requiring a hand-written display-only environment variable.
-- The 256K recipe is DFlash2 k=5 with prefix caching disabled. HumanEval 0–9
-  passed 10/10 at 26.10 weighted tokens/s. The exact prose-heavy recovery probe
-  reached 15.12 tokens/s versus 9.38 target-only; that low-acceptance stress
-  result is not a model-wide throughput baseline.
-- Fast USB4 transport is reported separately from speculative decoding, and
-  the runtime recipe now explicitly shows TP2 with PP1.
+## Measured GPU-operation latency
 
-## What's new in 0.3.0
+Recorded on two Ryzen AI Max+ 395 / Radeon 8060S systems with the qualified
+Linux 7.2.2 kernel and ROCm 10. These are completed-operation timings in
+**microseconds**, not cable ping figures.
 
-- A guided Connection Setup page replaces the dense configuration form with
-  an ordered two-machine workflow, clear readiness states, and reviewable
-  commands.
-- Launch is now the third tab. It shows both TP ranks, the active context
-  profile, process IDs, host-wide unified-memory use, available memory, and
-  the configured KV allocation on each machine.
-- The console can optionally configure, load, and unload the fixed GLM 5.3
-  deployment as one paired operation. It starts rank 0 before rank 1, stops
-  rank 1 before rank 0, and does not report a successful load until the model
-  frontend serves the exact selected context.
-- Fast-mode status now comes from the same scoped privileged inspection on
-  both hosts when model control is enabled. Overview, Diagnostics, and Launch
-  therefore agree when an NHI pair is ready or already in use.
-- The built-in `model-node` helper gives non-NixOS deployments the same narrow
-  status/configure/load/unload boundary as the packaged NixOS wrapper.
-- Missing permissions now produce copyable, host-specific NixOS and generic
-  Linux instructions inside the Launch page.
-- A browser disconnect no longer abandons an in-progress paired action. The
-  bounded coordinator finishes or runs its rollback path.
+| Operation | Control | Direct NHI result | Evidence |
+|---|---:|---:|---|
+| 64-KiB BF16 `[8,4096]` all-reduce, median | RCCL **340.904–342.745 µs** | **109.897–110.807 µs** | Exact sums; 67.5–67.9% less latency |
+| Single-token GPU activation + consumer credit | — | **45.505 µs** | BF16 pipeline mechanism gate |
+| T128 activation + credit, median | BF16 **1,642.803 µs** | I8G32 **1,043.402 µs** | 36.49% shorter cycle; experimental codec |
+| 6-MiB BF16 `[768,4096]` all-reduce, median | RCCL **4,943–4,961 µs** | **4,516–4,521 µs** | Exact sums; separate PP768 experiment |
 
-Model control remains off by default and does not broaden the ordinary link
-setup, reporting, or benchmark permissions.
+The M8 gate used 16 warmups and 64 measured calls per rank. All 80 NHI
+exchanges per rank passed with zero timeouts, protocol errors, driver failures
+or dropped events. [Raw records and timing boundaries](docs/performance.md#exact-bf16-tensor-parallel-all-reduce)
+are published with the results.
 
-## What it protects against
+The **~3.1× M8 operation-rate improvement is a component result**. Model
+impact depends on how much communication is exposed and how completion is
+scheduled. A later deferred-retirement development comparison improved
+verification cadence **4.05%** under fixed synthetic acceptance, and a natural
+structured request improved **21.23 → 23.09 tok/s** with the same accepted
+proposal count. Those experiments are distinct from the synchronous bridge
+in the published GLM source archive. The [performance report](docs/performance.md)
+identifies each variant, including the compressed path's scope and rejected
+M8 INT8 reduction.
 
-- accidental RCCL/Gloo traffic over Wi-Fi, LAN, or Tailscale;
-- mismatched jumbo-frame settings;
-- the strong directional asymmetry seen on some Strix Halo USB4 links;
-- a link that is fast but corrupt, unable to reconnect, or too unstable to use;
-- optimistic runtime timeouts copied from a better link.
+## Install and connect
 
-It cannot turn one cable into physical redundancy. A deployment that must
-survive a cable, port, or host failure still needs a second physical path and a
-request-level restart/checkpoint policy. `CiruStrixLink` deliberately fails closed
-instead of silently moving a latency-sensitive model job to a slower route.
-
-## Requirements
-
-- Linux with the `thunderbolt-net` driver (USB4NET/ThunderboltIP);
-- `ip` from iproute2 and `ping` from iputils;
-- NetworkManager for persistent cross-distro setup, or iproute2 for a temporary
-  setup;
-- a USB4 cable and two USB4-capable ports.
-
-Linux documents that loading `thunderbolt-net` on one Linux peer announces it
-to the other and creates a virtual Ethernet interface such as `thunderbolt0`:
-[Linux USB4 and Thunderbolt documentation](https://docs.kernel.org/admin-guide/thunderbolt.html#networking-over-thunderbolt-cable).
-
-## Prerequisite check
-
-Before setup, run the read-only capability inventory:
-
-```bash
-ciru-strixlink prerequisites
-```
-
-It lists every required and optional component as available, missing, inactive,
-not detected, unsupported, or unknown. Any component needing attention includes
-a GitHub link for that exact requirement and, when safe, a suggested command.
-
-A future UI can consume the same versioned data without parsing console text:
-
-```bash
-ciru-strixlink prerequisites --json
-```
-
-See the [UI integration contract](docs/ui-integration.md), [UI/UX agent
-brief](docs/ui-ux-agent-brief.md), and [installation guides](docs/install/index.md).
-Exit code 0 means ready, 2 means action is required, and 3 means the detected
-platform is unsupported.
-
-## Explicit installation
-
-The installer is intentionally conservative. With no `--apply`, it only shows
-the allowlisted actions it would take:
-
-```bash
-ciru-strixlink install
-ciru-strixlink install --include-optional --self
-```
-
-After reviewing the plan, a user can explicitly authorize it:
-
-```bash
-sudo ciru-strixlink install --include-optional --self --apply
-```
-
-On Ubuntu/Debian, Fedora/RHEL, and Arch, CiruStrixLink can install known
-user-space packages such as iproute2, iputils, ethtool, NetworkManager, and
-kmod. It can atomically install its own binary. It does not replace a kernel,
-reboot, alter firmware, authorize Thunderbolt devices, or imperatively edit
-NixOS. Those cases remain linked, distribution-specific instructions. The JSON
-plan exposes `can_apply` per action so a later UI can render an explicit Install
-button only where the same allowlist says it is safe.
-
-### Install a published Linux release
-
-Run this on both Strix Halo hosts. Set `VERSION` to the release you want to
-install:
+Run the following on **both Linux x86-64 hosts**. Download tools are `curl`,
+`tar` and `sha256sum`; StrixLink reports any missing network dependencies.
 
 ```bash
 VERSION=0.3.3
-curl -fL \
-  -o /tmp/ciru-strixlink.tar.gz \
-  "https://github.com/ciru-ai/CiruStrixLink/releases/download/v${VERSION}/ciru-strixlink-${VERSION}-linux-amd64.tar.gz"
-mkdir -p /tmp/ciru-strixlink-release
-tar -xzf /tmp/ciru-strixlink.tar.gz -C /tmp/ciru-strixlink-release
-sudo install -m 0755 \
-  /tmp/ciru-strixlink-release/ciru-strixlink \
-  /usr/local/bin/ciru-strixlink
+RELEASE_DIR=$(mktemp -d)
+cd "$RELEASE_DIR"
+RELEASE_URL="https://github.com/ciru-ai/CiruStrixLink/releases/download/v${VERSION}"
+curl -fLO "$RELEASE_URL/ciru-strixlink-${VERSION}-linux-amd64.tar.gz"
+curl -fLO "$RELEASE_URL/SHA256SUMS"
+sha256sum -c SHA256SUMS
+mkdir unpacked
+tar -xzf "ciru-strixlink-${VERSION}-linux-amd64.tar.gz" -C unpacked
+sudo install -m 0755 unpacked/ciru-strixlink /usr/local/bin/ciru-strixlink
 ciru-strixlink version
 ciru-strixlink prerequisites
 ```
 
-If `prerequisites` reports missing user-space packages, preview the allowlisted
-installation plan before applying it:
+Connect the USB4 cable, load `thunderbolt-net` on both hosts, and configure
+complementary addresses. Setup previews its changes until `--apply` is given.
 
 ```bash
-ciru-strixlink install --include-optional
-sudo ciru-strixlink install --include-optional --apply
-```
-
-## Build
-
-```bash
-make test
-make build
-sudo install -m 0755 dist/ciru-strixlink /usr/local/bin/ciru-strixlink
-```
-
-For a portable Linux binary from another host:
-
-```bash
-make linux-amd64
-```
-
-## Configure a pair
-
-Connect the cable, then inspect each host:
-
-```bash
-ciru-strixlink prerequisites
-ciru-strixlink probe
-```
-
-Start with MTU 1500. `setup` only prints its plan unless `--apply` is present.
-The NetworkManager profile has no gateway or DNS and can never become a default
-route.
-
-Host A:
-
-```bash
+# Host A: 10.77.77.1/30
+sudo modprobe thunderbolt-net
 ciru-strixlink setup --role a
 sudo ciru-strixlink setup --role a --apply
-```
 
-Host B:
-
-```bash
+# Host B: 10.77.77.2/30
+sudo modprobe thunderbolt-net
 ciru-strixlink setup --role b
 sudo ciru-strixlink setup --role b --apply
 ```
 
-The defaults are `10.77.77.1/30` and `10.77.77.2/30`. Use a different private
-`--subnet` for additional pairs. The aliases `stage1` and `stage0` map to A and
-B, but the benchmark may recommend reversing model stage order if the measured
-fast direction is different.
-
-If NetworkManager already has an active profile on the USB4 interface,
-`CiruStrixLink` refuses to displace it. Inspect the dry run, then add `--take-over`
-to switch profiles without deleting the existing one.
-
-The persistent setup uses NetworkManager's documented manual addressing,
-`never-default`, and Ethernet MTU properties: [NetworkManager settings
-reference](https://networkmanager.dev/docs/api/latest/nm-settings-nmcli.html).
-Without NetworkManager, use `--backend iproute2`; that setup ends at reboot.
-
-To remove a profile created by the tool, preview the exact destructive action
-first. If setup displaced an older profile, name it explicitly to restore it:
+After both sides are configured, run `doctor` on each against the other
+address. Start the temporary test server on B, then test from A:
 
 ```bash
-ciru-strixlink rollback --restore OLD_PROFILE
-sudo ciru-strixlink rollback --restore OLD_PROFILE --apply
-```
-
-Rollback deletes only the named `ciru-strixlink-usb4` profile by default. The
-preserved older profile is never deleted by takeover.
-
-## Verify and benchmark
-
-First verify from each end:
-
-```bash
-ciru-strixlink doctor --peer 10.77.77.2   # on A
-ciru-strixlink doctor --peer 10.77.77.1   # on B
-```
-
-Start the temporary test agent on B:
-
-```bash
+# B: leave running until the test finishes
+ciru-strixlink doctor --peer 10.77.77.1
 ciru-strixlink serve
+
+# A: in a separate host terminal
+ciru-strixlink doctor --peer 10.77.77.2
+ciru-strixlink test --peer 10.77.77.2 --duration 7s --streams 4 \
+  --output "$HOME/ciru-strixlink-report.json"
 ```
 
-Then run the full test on A:
-
-```bash
-ciru-strixlink test \
-  --peer 10.77.77.2 \
-  --duration 7s \
-  --streams 4 \
-  --output ciru-strixlink-report.json \
-  --env-file ciru-strixlink.env
-```
-
-The server binds only to B's USB4 address. If the host firewall blocks TCP
-55321, allow that port only on the USB4 interface and only from the peer, then
-remove the rule after testing.
-
-To authenticate the temporary test agent, put the same random value in a
-mode-0600 file on both peers and pass `--token-file`. The
-`CIRU_STRIXLINK_TOKEN` environment variable is also supported.
+Stop the test listener with Ctrl-C. The test uses TCP 55321 over the private
+USB4 interface and checks IP transport, integrity and reconnects. It does not
+run the GPU/NHI benchmarks above. The [complete guide](docs/getting-started.md)
+covers dependencies, existing profiles, tokens, firewall ports, jumbo frames,
+runtime environment files and the direct-NHI setup.
 
 ## Browser console
 
-The same binary serves a browser console. On the peer, start the read-only
-agent (Linux only; it binds exclusively to that host's USB4 address):
+Create the same private token file on both hosts as described in
+[step 4 of the guide](docs/getting-started.md#4-open-the-browser-console).
+Then run:
 
 ```bash
-ciru-strixlink agent --token-file TOKEN_FILE
+# Host B
+ciru-strixlink agent --token-file "$HOME/.config/ciru-strixlink/peer.token"
+
+# Host A
+ciru-strixlink ui --peer 10.77.77.2 \
+  --token-file "$HOME/.config/ciru-strixlink/peer.token"
 ```
 
-Then start the console here:
+Open `http://127.0.0.1:7749` on A. From a separate desktop, use
+`ssh -N -L 7749:127.0.0.1:7749 USER_A@HOST_A` and open the same localhost URL.
+The agent binds USB4 TCP 7748; the console stays on loopback. Peer tokens
+protect agent access, not the browser listener.
+
+Add `--model-url http://127.0.0.1:8083` to show an existing model frontend's
+identity and metrics. The optional Launch tab requires the installed GLM
+runtime, fixed complementary ranks, shared token and scoped model helpers.
+[Step 7](docs/getting-started.md#7-control-the-installed-glm-pair) gives the
+commands for each host. Model control is disabled by default.
+
+## Enable the direct GPU path
+
+| Layer | What to install or configure |
+|---|---|
+| Kernel | [16-patch Linux 7.2.2 series](kernel/linux-7.2.2/README.md), including DMA-BUF import and the stale-MSI-X reliability fix |
+| Link | Verified USB4NET first; then prepare both NHI endpoints and reconcile HopID 9/9, ring 4095, throttling 8192 ns and lease availability |
+| Runtime | [Published GLM HIP bridge and custom vLLM](docs/models/GLM5.3-Flash-CIRU-STRIX-IU4.md), or an explicitly integrated adapter for another runtime |
+| Privilege | Scoped system service granting `CAP_SYS_RAWIO` to the importing runtime with root-owned executable paths |
+
+Use the [ordered two-host NHI instructions](docs/getting-started.md#6-enable-the-direct-gpunhi-path).
+`--runtime vllm` generates configuration; it does not retrofit stock vLLM with
+the adapter. [Architecture](docs/architecture.md) explains GPU allocations,
+packet layout, completion scheduling and the source/release boundary.
+
+## Documentation and source
+
+- [Getting started](docs/getting-started.md) — install, connect, test, console, runtime and paired GLM launch.
+- [Architecture](docs/architecture.md) — management plane, GPU data path, DMA-BUF, frame protocol and completion.
+- [Performance](docs/performance.md) — µs latency, numerical correctness, model impact, reliability and evidence.
+- [CLI and console reference](docs/cli-and-console.md) — full command examples and metric definitions.
+- [Transport lifecycle](docs/transports.md) — pair state, ownership, arming and cleanup.
+- [Troubleshooting](docs/troubleshooting.md) — route, MTU, dependency and connection failures.
+- [Changelog](CHANGELOG.md) · [Validation](docs/validation.md) · [Security](SECURITY.md).
+
+## Build and credits
 
 ```bash
-ciru-strixlink ui --peer 10.77.77.2 --token-file TOKEN_FILE
+git clone https://github.com/ciru-ai/CiruStrixLink.git
+cd CiruStrixLink
+make test
+make vet
+make linux-amd64
 ```
 
-The console listens only on `127.0.0.1:7749` by default. Open the printed
-loopback address in a browser on that host. To reach it remotely over a trusted
-LAN, opt in explicitly:
-
-```bash
-ciru-strixlink ui --listen 0.0.0.0 --peer 10.77.77.2 --token-file TOKEN_FILE
-```
-
-With the wildcard listener, `ui` prints loopback, LAN IPv4, and configured
-USB4 addresses. Setup, rollback, install, and endpoint actions are preview-only;
-applying them still requires the reviewed `sudo ... --apply` command. The
-console can also start a bounded link benchmark through the peer agent.
-
-The peer token does not authenticate the browser console. On an untrusted LAN,
-keep the default loopback listener and use an authenticated tunnel. Do not
-expose ports 7748, 7749, or 55321 to the public internet. See [Security](SECURITY.md).
-
-If NHI inspection needs root, the console and peer agent can remain ordinary
-user processes. Set `CIRU_STRIXLINK_STATUS_HELPER` on each to an existing scoped
-helper's absolute path. Collection invokes only
-`sudo -n HELPER transport-status` and uses its JSON when it identifies the same
-host, interface, and peer. The existing sudo policy must already allow that
-read-only action; the UI neither grants privileges nor exposes helper commands
-through HTTP. Failed inspection stays visibly unverified.
-
-To show the served model and PP/TG in the Overview, point the console at the
-existing model frontend (not an individual rank in a mirrored TP deployment):
-
-```bash
-ciru-strixlink ui --peer PEER_USB4_ADDRESS --model-url http://127.0.0.1:8083
-```
-
-`CIRU_STRIXLINK_MODEL_URL` is the equivalent environment setting. For an
-authenticated frontend, set `CIRU_STRIXLINK_MODEL_TOKEN` in the console's
-environment. The console only reads `/v1/models` and `/metrics`; it never sends
-prompts or changes the model. The API location is shown using the console host's
-name when the upstream is loopback. Model metrics refresh every five seconds,
-independently of the thirty-second link inspection.
-
-### Paired GLM launch control
-
-The third tab is a Launch page for the fixed two-rank GLM 5.3 deployment.
-Control is disabled by default. The normal console and agent remain read-only
-until both processes are started with `--model-control`.
-
-The deployment has three parts:
-
-| Location | Process | Network exposure |
-|---|---|---|
-| Model host A | `ciru-strixlink ui` and its local scoped helper | Loopback only |
-| Model host B | `ciru-strixlink agent` and its local scoped helper | Fixed USB4 address only |
-| Desktop | Ordinary browser reached through an SSH tunnel | No StrixLink service required |
-
-Create one mode-0600 token file and place the same value on both model hosts
-through a trusted administrative channel. Give each StrixLink process its
-host's fixed TP rank and the other rank's fixed USB4 IPv4 address.
-
-On the model host that will run the peer agent:
-
-```bash
-ciru-strixlink agent \
-  --token-file TOKEN_FILE \
-  --model-control \
-  --model-rank 1 \
-  --model-peer RANK_0_USB4_ADDRESS
-```
-
-On the model host that will run the console:
-
-```bash
-ciru-strixlink ui \
-  --peer RANK_1_USB4_ADDRESS \
-  --token-file TOKEN_FILE \
-  --model-url http://127.0.0.1:8083 \
-  --model-control \
-  --model-rank 0
-```
-
-The rank numbers may be reversed, but they must be complementary and must
-match the model's node configuration. Model control refuses a non-loopback
-console, a missing model frontend, a missing shared token, or a non-IPv4 peer.
-
-From a desktop, forward the console's loopback port and open the Launch tab:
-
-```bash
-ssh -N -L 7749:127.0.0.1:7749 USER@CONSOLE_MODEL_HOST
-```
-
-Then open `http://127.0.0.1:7749/#/launch`. The desktop does not need the
-StrixLink binary and does not receive model-host privileges.
-
-#### Scoped permissions
-
-On the packaged NixOS deployment, the root-owned
-`/run/current-system/sw/bin/glm53-nhi-service-control` wrapper must allowlist
-`probe`, `transport-status`, `start`, `stop`, and the three
-`context-64k|128k|256k` actions. Grant only that wrapper passwordless access:
-
-```nix
-security.sudo.extraRules = [{
-  users = [ "MODEL_SERVICE_USER" ];
-  commands = [{
-    command = "/run/current-system/sw/bin/glm53-nhi-service-control";
-    options = [ "NOPASSWD" ];
-  }];
-}];
-```
-
-On other Linux distributions, install the current root-owned StrixLink binary
-at `/usr/local/bin/ciru-strixlink` and allow only the exact `model-node`
-commands for that host. The Launch page renders the complete host-specific
-sudoers fragment—including its service user, all three profiles, and fixed
-peer IP—when permission is missing. Validate the fragment with `visudo` and
-install it as a root-owned mode-0440 file.
-
-The helper cannot execute arbitrary commands, choose another unit, change a
-running context, or inspect or stop unrelated applications. A paired load:
-
-1. confirms both ranks are installed, stopped, complementary, and authorized;
-2. refuses to proceed while the portable form of the same GLM deployment is
-   active on either host;
-3. verifies the NHI pair is qualified and its exclusive lease is available;
-4. writes the selected profile to both stopped ranks;
-5. starts rank 0 and then rank 1;
-6. waits for the model frontend to serve the exact selected context; and
-7. stops both ranks again if startup or readiness fails.
-
-Unload stops rank 1 before rank 0. A browser disconnect does not interrupt the
-bounded paired operation. See the
-[GLM 5.3 deployment guide](docs/models/GLM5.3-Flash-CIRU-STRIX-IU4.md) for the
-complete helper allowlist and model-specific installation procedure.
-
-The vLLM display uses one model's engine-0 counters from one frontend, never a
-sum across mirrored ranks. Live output is tokens per polling interval (wall
-time). Completed-request TG excludes prefill and the first generated token;
-PP counts newly computed KV tokens, excluding cached tokens. Before a new request
-finishes, completed-request rates are explicitly labeled "Since engine start";
-afterward they show the last request(s) observed. Unsupported or unavailable
-metrics show a dash, not an invented rate. Link type describes the inspected
-connection; it is not proof that an arbitrary configured model uses that link.
-
-The speed chart retains up to ten minutes of samples in console memory; a page
-refresh keeps that history, while a console restart or model/engine change
-clears it. Generation uses measured output tokens per polling interval, including
-zero output while idle. The prompt-fill view plots completed-request PP samples.
-No model requests are generated to populate either chart.
-
-Draft acceptance is accepted draft tokens divided by proposed draft tokens,
-excluding bonus target tokens. It uses the latest reported counter increment,
-or a clearly labeled since-start total before the first increment. No new drafts
-retain the previous sample and its timestamp, rather than showing zero. Set
-`CIRU_STRIXLINK_MODEL_SPECULATION=DFlash2` to label the existing speculative
-runtime when using a launcher without managed runtime settings; this is a
-display fallback and does not enable or alter speculation. The managed GLM 5.3
-launcher instead reports the validated `dflash-tokens` setting directly, and
-the Launch page requires both ranks to agree before presenting it as known.
-
-To review reports a peer sent over, reconcile files instead of a live agent:
-
-```bash
-ciru-strixlink ui --report-a host-a.transport.json --report-b host-b.transport.json
-```
-
-## Jumbo frames
-
-Only enable MTU 9000 after the 1500-byte setup passes on both ends:
-
-```bash
-sudo ciru-strixlink setup --role a --mtu 9000 --apply
-sudo ciru-strixlink setup --role b --mtu 9000 --apply
-ciru-strixlink doctor --peer PEER_USB4_ADDRESS
-```
-
-`doctor` sends a don't-fragment probe at the configured interface MTU. A
-failure is a release blocker; do not assume the kernel will repair an MTU
-mismatch for a point-to-point link.
-
-## Runtime contract
-
-### Portable and accelerated transports
-
-The portable baseline must be established first and remains the fallback:
-
-```bash
-ciru-strixlink transport status --peer 10.77.77.2 \
-  --output host-a.transport.json
-ciru-strixlink transport status --peer 10.77.77.1 \
-  --output host-b.transport.json
-ciru-strixlink transport reconcile \
-  --a host-a.transport.json --b host-b.transport.json \
-  --output pair.transport.json
-```
-
-`thunderbolt-net` owns network HopID 8. Optional `thunderbolt_stream` endpoints
-must never be started until both reports prove carrier, correct routing, and
-peer reachability. A coordinator may then start the reviewed local transaction
-on both hosts concurrently:
-
-```bash
-sudo ciru-strixlink transport endpoint prepare \
-  --peer PEER_USB4_ADDRESS --apply
-```
-
-After both commands return, collect fresh status reports and reconcile again.
-NHI is selectable only when each peer has exactly one matching endpoint at
-HopID 9/9. Any one-sided or partial state requires exact cleanup on both hosts
-before portable fallback:
-
-```bash
-ciru-strixlink transport endpoint cleanup       # review holders and exact path
-sudo ciru-strixlink transport endpoint cleanup --apply
-```
-
-Cleanup never kills a process and refuses to remove a device that has a holder.
-Legacy endpoints require an explicit `--adopt` after their names, holders, and
-parameters have been reviewed. See [transport lifecycle](docs/transports.md).
-
-Once the pair is reconciled, generate an environment for any launcher:
-
-```bash
-ciru-strixlink transport env --peer PEER_USB4_ADDRESS \
-  --mode auto --runtime generic --pair-report pair.transport.json \
-  --output ciru-strixlink.env
-```
-
-`auto` selects NHI only when the two-sided report says it is ready; otherwise it
-selects the portable socket transport. `--runtime vllm` adds only the vLLM
-adapter variable. `generic` and `pytorch` keep the link independent of model
-architecture and serving framework.
-
-The generated environment pins RCCL-compatible launchers and Gloo to the
-verified interface:
-
-```text
-NCCL_SOCKET_IFNAME==thunderbolt0
-NCCL_SOCKET_FAMILY=AF_INET
-GLOO_SOCKET_IFNAME=thunderbolt0
-```
-
-The leading `=` in the RCCL value requests an exact interface match instead of
-a prefix match. RCCL documents both `NCCL_SOCKET_IFNAME` and
-`NCCL_SOCKET_FAMILY` in its [network environment variable
-reference](https://rocm.docs.amd.com/projects/rccl/en/latest/api-reference/env-variables.html#network-and-topology).
-
-It also records the recommended bulk-sender/stage-0 host, quality class,
-heartbeat, peer deadline, reconnect budget, maximum in-flight slots, and chunk
-size. These values are conservative starting points, not permission to replay
-an individual tensor after a failure.
-
-The model transport should use:
-
-- a bounded two-slot credit protocol (one slot on degraded links);
-- sequence and generation numbers so a reconnected peer cannot consume stale
-  state;
-- checksums and explicit payload lengths;
-- heartbeats and finite deadlines;
-- whole-job or idempotent-request restart after a broken pipeline epoch.
-
-Mid-microbatch transparent replay is unsafe unless the model layer can also
-reconstruct both peers' cache and scheduler state.
-
-## GLM5.3 Flash CIRU STRIX IU4
-
-The public model recipe for **GLM5.3 Flash CIRU STRIX IU4** uses
-CiruStrixLink to qualify the two-host USB4 path, reconcile the portable and NHI
-states, and generate the launcher environment before starting the two TP ranks.
-Follow the [model integration guide](docs/models/GLM5.3-Flash-CIRU-STRIX-IU4.md).
-
-The public display name is `GLM5.3 Flash CIRU STRIX IU4`; scripts and API calls
-use the filesystem-safe ID `GLM5.3-Flash-CIRU-STRIX-IU4`.
-
-## Quality gates
-
-Classification always uses the weaker isolated direction:
-
-| Class | Minimum weaker direction | RTT p99 | Readiness |
-|---|---:|---:|---|
-| excellent | 12 Gb/s | 2 ms | ready |
-| good | 5 Gb/s | 5 ms | ready |
-| constrained | 1 Gb/s | 15 ms | ready with conservative policy |
-| degraded | below a gate | any | not ready |
-
-All ready classes additionally require every reconnect and both 8-MiB
-integrity tests to pass. Exit status 2 means a readiness or path-MTU gate
-failed, making the command suitable for an installer or CI preflight.
-
-## Development
-
-```bash
-go test ./...
-go vet ./...
-```
-
-The wire protocol is versioned and intentionally small. A future incompatible
-test agent must increment its protocol version rather than guessing.
+The binary is written to `dist/ciru-strixlink-linux-amd64`; building requires
+Go and Make. CiruStrixLink's Go utility is [Apache-2.0](LICENSE). The bundled
+Linux patches retain GPL-2.0 and their original authors; the published HIP
+bridge retains MIT. The kernel foundation includes Linux USB4STREAM and
+[jyatesdotdev/strix-rdma](https://github.com/jyatesdotdev/strix-rdma), with
+Ciru's Linux 7.2.2 rebases, reliability fix, GPU/runtime integration and
+operator tooling. [Source identities and license boundaries](docs/architecture.md#source-and-release-boundary)
+are documented explicitly.

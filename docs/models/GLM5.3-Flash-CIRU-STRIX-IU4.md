@@ -17,6 +17,10 @@ only to identify compatible hardware and software.
 
 ## 1. Install the bundled CiruStrixLink release on both hosts
 
+For the complete connection, token and browser setup, see the
+[two-host guide](../getting-started.md). The [GPU architecture](../architecture.md)
+and [microsecond benchmarks](../performance.md) describe the fast path.
+
 The model repository includes the qualified CiruStrixLink 0.3.3 archive. Use an
 isolated Python environment for the Hugging Face CLI, then extract the bundled
 binary:
@@ -32,7 +36,10 @@ MODEL_REPO=jcbtc/GLM5.3-Flash-CIRU-STRIX-IU4
 mkdir -p /tmp/ciru-strixlink-release
 "$HF" download "$MODEL_REPO" \
   --include "tools/ciru-strixlink-${VERSION}-linux-amd64.tar.gz" \
+            "tools/ciru-strixlink-${VERSION}-SHA256SUMS" \
   --local-dir /tmp/ciru-strixlink-model-release
+(cd /tmp/ciru-strixlink-model-release/tools && \
+  sha256sum -c "ciru-strixlink-${VERSION}-SHA256SUMS")
 tar -xzf \
   "/tmp/ciru-strixlink-model-release/tools/ciru-strixlink-${VERSION}-linux-amd64.tar.gz" \
   -C /tmp/ciru-strixlink-release

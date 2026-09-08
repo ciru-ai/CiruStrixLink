@@ -1,0 +1,4 @@
+# Preserve imported mail patches and upstream license text byte-for-byte.
+# Their diff-context prefixes and signatures are data, not source indentation.
+kernel/linux-7.2.2/*.patch -whitespace
+kernel/linux-7.2.2/LICENSES/** -whitespace
